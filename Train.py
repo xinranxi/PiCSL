@@ -182,67 +182,70 @@ def train(configParams, isTrain=True, isCalc=False):
                     with autocast():
                         logProbs1, logProbs2, logProbs3, logProbs4, logProbs5, lgt, x1, x2, x3 = moduleNet(data, dataLen, True)
                 except Exception as e:
-                    print(f"\nError in training loop: {e}")
+                    print("\n" + "="*50)
+                    print("DETAILED ERROR IN TRAINING LOOP:")
                     import traceback
                     traceback.print_exc()
+                    print("="*50)
                     exit(1)
-                
-                    #########################################
-                    if "MSTNet" == moduleChoice:
-                        logProbs1 = logSoftMax(logProbs1)
-                        logProbs2 = logSoftMax(logProbs2)
+
+                #########################################
+                if "MSTNet" == moduleChoice:
+                    logProbs1 = logSoftMax(logProbs1)
+                    logProbs2 = logSoftMax(logProbs2)
+                    logProbs3 = logSoftMax(logProbs3)
+                    logProbs4 = logSoftMax(logProbs4)
+
+                    loss1 = ctcLoss(logProbs1.float(), targetOutData, lgt, targetLengths)
+                    loss2 = ctcLoss(logProbs2.float(), targetOutData, lgt, targetLengths)
+                    loss3 = ctcLoss(logProbs3.float(), targetOutData, lgt * 2, targetLengths)
+                    loss4 = ctcLoss(logProbs4.float(), targetOutData, lgt * 4, targetLengths)
+                    loss = loss1 + loss2 + loss3 + loss4
+                elif "LightTFNet" == moduleChoice:
+                     logProbs1 = logSoftMax(logProbs1)
+                     loss = ctcLoss(logProbs1.float(), targetOutData, lgt, targetLengths)
+                elif "VAC" == moduleChoice or "CorrNet" == moduleChoice or "MAM-FSD" == moduleChoice \
+                        or "SEN" == moduleChoice or "TFNet" == moduleChoice:
+                    loss3 = 25 * kld(logProbs2, logProbs1, use_blank=False)
+
+                    logProbs1 = logSoftMax(logProbs1)
+                    logProbs2 = logSoftMax(logProbs2)
+
+                    loss1 = ctcLoss(logProbs1, targetOutData, lgt, targetLengths).mean()
+                    loss2 = ctcLoss(logProbs2, targetOutData, lgt, targetLengths).mean()
+                    if "MAM-FSD" == moduleChoice:
+                        loss4 = mseLoss(x1[0], x1[1])
+                        loss5 = mseLoss(x2[0], x2[1])
+                        loss6 = mseLoss(x3[0], x3[1])
+
+                        loss = loss1 + loss2 + loss3 + 5 * loss4 + 1 * loss5 + 70 * loss6
+                    elif "TFNet" == moduleChoice:
+                        loss6 = 25 * kld(logProbs4, logProbs3, use_blank=False)
+
                         logProbs3 = logSoftMax(logProbs3)
                         logProbs4 = logSoftMax(logProbs4)
 
-                        loss1 = ctcLoss(logProbs1, targetOutData, lgt, targetLengths)
-                        loss2 = ctcLoss(logProbs2, targetOutData, lgt, targetLengths)
-                        loss3 = ctcLoss(logProbs3, targetOutData, lgt * 2, targetLengths)
-                        loss4 = ctcLoss(logProbs4, targetOutData, lgt * 4, targetLengths)
-                        loss = loss1 + loss2 + loss3 + loss4
-                    elif "LightTFNet" == moduleChoice:
-                         logProbs1 = logSoftMax(logProbs1)
-                         loss = ctcLoss(logProbs1, targetOutData, lgt, targetLengths)
-                    elif "VAC" == moduleChoice or "CorrNet" == moduleChoice or "MAM-FSD" == moduleChoice \
-                            or "SEN" == moduleChoice or "TFNet" == moduleChoice:
-                        loss3 = 25 * kld(logProbs2, logProbs1, use_blank=False)
+                        loss4 = ctcLoss(logProbs3, targetOutData, lgt, targetLengths).mean()
+                        loss5 = ctcLoss(logProbs4, targetOutData, lgt, targetLengths).mean()
 
-                        logProbs1 = logSoftMax(logProbs1)
-                        logProbs2 = logSoftMax(logProbs2)
+                        logProbs5 = logSoftMax(logProbs5)
+                        loss7 = ctcLoss(logProbs5, targetOutData, lgt, targetLengths).mean()
 
-                        loss1 = ctcLoss(logProbs1, targetOutData, lgt, targetLengths).mean()
-                        loss2 = ctcLoss(logProbs2, targetOutData, lgt, targetLengths).mean()
-                        if "MAM-FSD" == moduleChoice:
-                            loss4 = mseLoss(x1[0], x1[1])
-                            loss5 = mseLoss(x2[0], x2[1])
-                            loss6 = mseLoss(x3[0], x3[1])
+                        loss = loss1 + loss2 + loss3 + loss4 + loss5 + loss6 + loss7
+                    else:
+                        loss = loss1 + loss2 + loss3
 
-                            loss = loss1 + loss2 + loss3 + 5 * loss4 + 1 * loss5 + 70 * loss6
-                        elif "TFNet" == moduleChoice:
-                            loss6 = 25 * kld(logProbs4, logProbs3, use_blank=False)
+                if np.isinf(loss.item()) or np.isnan(loss.item()):
+                    print('loss is nan')
+                    continue
 
-                            logProbs3 = logSoftMax(logProbs3)
-                            logProbs4 = logSoftMax(logProbs4)
+                optimizer.zero_grad()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-                            loss4 = ctcLoss(logProbs3, targetOutData, lgt, targetLengths).mean()
-                            loss5 = ctcLoss(logProbs4, targetOutData, lgt, targetLengths).mean()
-
-                            logProbs5 = logSoftMax(logProbs5)
-                            loss7 = ctcLoss(logProbs5, targetOutData, lgt, targetLengths).mean()
-
-                            loss = loss1 + loss2 + loss3 + loss4 + loss5 + loss6 + loss7
-                        else:
-                            loss = loss1 + loss2 + loss3
-
-                    if np.isinf(loss.item()) or np.isnan(loss.item()):
-                        print('loss is nan')
-                        continue
-
-                    optimizer.zero_grad()
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-
-                loss_value.append(loss.item())
+                if "loss" in locals():
+                    loss_value.append(loss.item())
 
                 torch.cuda.empty_cache()
 

@@ -5,6 +5,7 @@ except ImportError:
     ctcdecode = None
 from itertools import groupby
 import torch.nn.functional as F
+import torch
 from six.moves import xrange
 
 class Decode(object):# CTC解码类
@@ -80,7 +81,7 @@ class Decode(object):# CTC解码类
                 except:
                     ret_list.append([('EMPTY', 0)])
 
-        return ret_list, first_result
+        return ret_list, index_list
 
     def MaxDecode(self, nn_output, vid_lgt):
         index_list = torch.argmax(nn_output, axis=2)
@@ -99,7 +100,7 @@ class Decode(object):# CTC解码类
                              enumerate(max_result)])
             # result_list.append(max_result)
         # return ret_list, result_list
-        return ret_list
+        return ret_list, index_list
 
 def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0):
     """

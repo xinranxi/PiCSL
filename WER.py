@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 WER_COST_DEL = 1
 WER_COST_INS = 1
@@ -147,8 +148,44 @@ def WerScore(predictionResult, targetOutData, idx2word, batchSize):
     references = [" "]
     werScoreSum = 0
     for i in range(batchSize):
-        predictionResultStr = [idx2word[j] for j in predictionResult[i]]
-        targetOutDataStr = [idx2word[j] for j in targetOutData[i]]
+        # 处理 predictionResult 格式问题：确保它是一个扁平的索引列表
+        pred_item = predictionResult[i]
+        
+        # 如果是 tensor，转 list
+        if isinstance(pred_item, torch.Tensor):
+            pred_indices = pred_item.tolist()
+        elif isinstance(pred_item, list):
+             # 检查是否嵌套 [[1,2,3]]
+             if len(pred_item) > 0 and isinstance(pred_item[0], list):
+                 pred_indices = [x for sub in pred_item for x in sub]
+             else:
+                 pred_indices = pred_item
+        else:
+             pred_indices = pred_item
+             
+        # 安全获取字典值
+        predictionResultStr = []
+        for j in pred_indices:
+             try:
+                 val = int(j)
+                 if val in idx2word:
+                     predictionResultStr.append(idx2word[val])
+             except:
+                 pass
+        
+        # 处理 targetOutData 格式
+        target_indices = targetOutData[i]
+        if isinstance(target_indices, torch.Tensor):
+            target_indices = target_indices.tolist()
+            
+        targetOutDataStr = []
+        for j in target_indices:
+             try:
+                 val = int(j)
+                 if val in idx2word:
+                     targetOutDataStr.append(idx2word[val])
+             except:
+                 pass
 
         hypotheses[0] = ''.join((x+" " for x in predictionResultStr))
         references[0] = ''.join((x+" " for x in targetOutDataStr))
