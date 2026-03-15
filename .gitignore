@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+# Ignore potentially large data files
+CE-CSL/video/
+CE-CSL/train/
+# If there are model checkpoints, ignore them too
+params/*.pth
+params/*.pkl
