@@ -81,7 +81,8 @@ class Decode(object):# CTC解码类
                 except:
                     ret_list.append([('EMPTY', 0)])
 
-        return ret_list, index_list
+        # 在 Beam Search 情况下，返回预测序列列表 + 最后一条的 token 索引（兼容 Train.py 的 unpack）
+        return ret_list, first_result
 
     def MaxDecode(self, nn_output, vid_lgt):
         index_list = torch.argmax(nn_output, axis=2)

@@ -16,6 +16,15 @@ def WerList(references, hypotheses):
         total_sub += res["num_sub"]
         total_ref_len += res["num_ref"]
 
+    # 如果参考长度为零，避免除零导致 nan（通常表示标签为空）
+    if total_ref_len == 0:
+        return {
+            "wer": 0.0,
+            "del_rate": 0.0,
+            "ins_rate": 0.0,
+            "sub_rate": 0.0,
+        }
+
     wer = (total_error / total_ref_len) * 100
     del_rate = (total_del / total_ref_len) * 100
     ins_rate = (total_ins / total_ref_len) * 100
