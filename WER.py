@@ -175,12 +175,13 @@ def WerScore(predictionResult, targetOutData, idx2word, batchSize):
         # 安全获取字典值
         predictionResultStr = []
         for j in pred_indices:
-             try:
-                 val = int(j)
-                 if val in idx2word:
-                     predictionResultStr.append(idx2word[val])
-             except:
-                 pass
+            try:
+                val = int(j)
+            except:
+                continue
+            # safe index check
+            if 0 <= val < len(idx2word):
+                predictionResultStr.append(idx2word[val])
         
         # 处理 targetOutData 格式
         target_indices = targetOutData[i]
@@ -189,12 +190,12 @@ def WerScore(predictionResult, targetOutData, idx2word, batchSize):
             
         targetOutDataStr = []
         for j in target_indices:
-             try:
-                 val = int(j)
-                 if val in idx2word:
-                     targetOutDataStr.append(idx2word[val])
-             except:
-                 pass
+            try:
+                val = int(j)
+            except:
+                continue
+            if 0 <= val < len(idx2word):
+                targetOutDataStr.append(idx2word[val])
 
         hypotheses[0] = ''.join((x+" " for x in predictionResultStr))
         references[0] = ''.join((x+" " for x in targetOutDataStr))

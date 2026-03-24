@@ -2,6 +2,11 @@ import configparser
 import os
 import torch
 
+# Make config path robust: locate params/config.ini relative to this file
+def get_config_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "params", "config.ini")
+
 def readConfig():
     # 默认配置参数
     configParams = {
@@ -19,10 +24,11 @@ def readConfig():
         "batchSize": 1,
         "numWorkers": 2,
         "pinmMemory": 1,
+        "moduleChoice": "LightTFNet",
         "dataSetName": "RWTH",
     }
 
-    configPath = "params/config.ini"
+    configPath = get_config_path()
     if os.path.exists(configPath):
         print("开始读取配置参数")
         cf = configparser.ConfigParser()

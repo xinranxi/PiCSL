@@ -53,23 +53,6 @@ def train(configParams, isTrain=True, isCalc=False):
     dataSetName = configParams["dataSetName"]
     max_num_states = 1
 
-    if dataSetName == "RWTH":
-        sourcefilePath = './evaluation/wer/evalute'
-
-        if isTrain:
-            fileName = "output-hypothesis-{}.ctm".format('dev')
-        else:
-            fileName = "output-hypothesis-{}.ctm".format('test')
-        filePath = os.path.join(sourcefilePath, fileName)
-    elif dataSetName == "RWTH-T":
-        sourcefilePath = './evaluationT/wer/evalute'
-
-        if isTrain:
-            fileName = "output-hypothesis-{}.ctm".format('dev')
-        else:
-            fileName = "output-hypothesis-{}.ctm".format('test')
-        filePath = os.path.join(sourcefilePath, fileName)
-
     # 预处理语言序列
     word2idx, wordSetNum, idx2word = DataProcessMoudle.Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName)
     # 图像预处理
@@ -146,7 +129,7 @@ def train(configParams, isTrain=True, isCalc=False):
 
     # 设置学习率衰减规则
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer=optimizer,
-                                                     milestones=[35, 45],
+                                                     milestones=[100, 150],
                                                      gamma=0.2, last_epoch=lastEpoch)
 
     # 解码参数
@@ -298,9 +281,12 @@ def train(configParams, isTrain=True, isCalc=False):
                 if dataSetName == "RWTH" or dataSetName == "RWTH-T":
                     total_info += info
                     total_sent += pred
-                elif dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
-                    werScore = WerScore([targetOutDataCTC], targetData, idx2word, batchSize)
-                    werScoreSum = werScoreSum + werScore
+            if not os.path.exists('./wer/'):
+                os.makedirs('./wer/')
+
+            if dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
+                werScore = WerScore([targetOutDataCTC], targetData, idx2word, batchSize)
+                werScoreSum = werScoreSum + werScore
 
             torch.cuda.empty_cache()
 
@@ -338,20 +324,8 @@ def train(configParams, isTrain=True, isCalc=False):
             moduleSavePath1 = 'module/bestMoudleNet_' + str(epoch) + '.pth'
             torch.save(moduleDict, moduleSavePath1)
 
-            if dataSetName == "RWTH":
-                ##########################################################################
-                DataProcessMoudle.write2file(filePath, total_info, total_sent)
-
-                evaluteMode('evalute_dev1')
-                ##########################################################################
-                DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('dev', epoch), total_info, total_sent)
-            elif dataSetName == "RWTH-T":
-                ##########################################################################
-                DataProcessMoudle.write2file(filePath, total_info, total_sent)
-                evaluteModeT('evalute_dev1')
-                ##########################################################################
-                DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('dev', epoch),
-                                             total_info, total_sent)
+            # 保存识别结果到 wer 文件夹
+            DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('dev', epoch), total_info, total_sent)
 
             print(f"validLoss: {currentLoss:.5f}, werScore: {werScore:.2f}")
             print(f"bestLoss: {bestLoss:.5f}, beatEpoch: {bestLossEpoch}, bestWerScore: {bestWerScore:.2f}, bestWerScoreEpoch: {bestWerScoreEpoch}")
@@ -371,6 +345,9 @@ def train(configParams, isTrain=True, isCalc=False):
             loss_value = []
             total_info = []
             total_sent = []
+
+            if not os.path.exists('./wer/'):
+                os.makedirs('./wer/')
 
             for Dict in tqdm(testLoader):
                 data = Dict["video"].to(device)
@@ -397,10 +374,10 @@ def train(configParams, isTrain=True, isCalc=False):
 
                 pred, targetOutDataCTC = decoder.decode(logProbs1, lgt, batch_first=False, probs=False)
 
-                if dataSetName == "RWTH" or dataSetName == "RWTH-T":
-                    total_info += info
-                    total_sent += pred
-                elif dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
+                total_info += info
+                total_sent += pred
+
+                if dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
                     werScore = WerScore([targetOutDataCTC], targetData, idx2word, batchSize)
                     werScoreSum = werScoreSum + werScore
 
@@ -417,20 +394,8 @@ def train(configParams, isTrain=True, isCalc=False):
             bestLoss = currentLoss
             bestLossEpoch = i + offset - 1
 
-            if dataSetName == "RWTH":
-                ##########################################################################
-                DataProcessMoudle.write2file(filePath, total_info, total_sent)
-                evaluteMode('evalute_test')
-                ##########################################################################
-                DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('test', i+1), total_info,
-                                             total_sent)
-            elif dataSetName == "RWTH-T":
-                ##########################################################################
-                DataProcessMoudle.write2file(filePath, total_info, total_sent)
-                evaluteModeT('evalute_test')
-                ##########################################################################
-                DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('test', i+1), total_info,
-                                             total_sent)
+            # 保存测试集识别结果
+            DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('test', i+1), total_info, total_sent)
 
             print(f"testLoss: {currentLoss:.5f}, werScore: {werScore:.2f}")
             print(f"bestLoss: {bestLoss:.5f}, bestEpoch: {bestLossEpoch}, bestWerScore: {bestWerScore:.2f}, bestWerScoreEpoch: {bestWerScoreEpoch}")
