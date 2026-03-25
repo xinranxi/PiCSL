@@ -29,6 +29,32 @@ def stable(dataloader, seed):
     seed_torch(seed)
     return dataloader
 
+def _pred_to_indices(pred, word2idx):
+    """Convert decoder output to a flat token-id list for WerScore."""
+    pred_indices = []
+    if not pred:
+        return pred_indices
+
+    # pred is usually: [[(word, t), (word, t), ...]] for batch_size=1
+    pred_item = pred[0]
+    if isinstance(pred_item, list):
+        for token in pred_item:
+            word = token[0] if isinstance(token, tuple) else token
+            if word in word2idx:
+                pred_indices.append(word2idx[word])
+    return pred_indices
+
+def _indices_to_gloss(indices, idx2word):
+    tokens = []
+    for x in indices:
+        try:
+            v = int(x)
+        except:
+            continue
+        if 0 <= v < len(idx2word):
+            tokens.append(idx2word[v])
+    return " ".join(tokens)
+
 def train(configParams, isTrain=True, isCalc=False):
     # 参数初始化
     # 读入数据路径
@@ -278,15 +304,27 @@ def train(configParams, isTrain=True, isCalc=False):
                 ##########################################################################
                 pred, targetOutDataCTC = decoder.decode(logProbs1, lgt, batch_first=False, probs=False)
 
-                if dataSetName == "RWTH" or dataSetName == "RWTH-T":
+                if dataSetName == "RWTH" or dataSetName == "RWTH-T" or dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
                     total_info += info
                     total_sent += pred
+
+                if dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
+                    pred_indices = _pred_to_indices(pred, word2idx)
+
+                    # Debug: compare one-sample reference and hypothesis for CE-CSL/CSL-Daily.
+                    ref_indices = targetData[0].tolist() if hasattr(targetData[0], "tolist") else targetData[0]
+                    ref_sent = _indices_to_gloss(ref_indices, idx2word)
+                    hyp_sent = _indices_to_gloss(pred_indices, idx2word)
+                    print(f"\n[DEBUG Epoch {epoch}]")
+                    print(f"Ref: {ref_sent}")
+                    print(f"Hyp: {hyp_sent}")
+                    if ref_sent.strip() != hyp_sent.strip():
+                        print("--> MISMATCH detected!")
+
+                    werScore = WerScore([pred_indices], targetData, idx2word, batchSize)
+                    werScoreSum = werScoreSum + werScore
             if not os.path.exists('./wer/'):
                 os.makedirs('./wer/')
-
-            if dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
-                werScore = WerScore([targetOutDataCTC], targetData, idx2word, batchSize)
-                werScoreSum = werScoreSum + werScore
 
             torch.cuda.empty_cache()
 
@@ -378,7 +416,18 @@ def train(configParams, isTrain=True, isCalc=False):
                 total_sent += pred
 
                 if dataSetName == "CSL-Daily" or dataSetName == "CE-CSL":
-                    werScore = WerScore([targetOutDataCTC], targetData, idx2word, batchSize)
+                    pred_indices = _pred_to_indices(pred, word2idx)
+
+                    ref_indices = targetData[0].tolist() if hasattr(targetData[0], "tolist") else targetData[0]
+                    ref_sent = _indices_to_gloss(ref_indices, idx2word)
+                    hyp_sent = _indices_to_gloss(pred_indices, idx2word)
+                    print(f"\n[DEBUG TEST Epoch {i + offset}]")
+                    print(f"Ref: {ref_sent}")
+                    print(f"Hyp: {hyp_sent}")
+                    if ref_sent.strip() != hyp_sent.strip():
+                        print("--> MISMATCH detected!")
+
+                    werScore = WerScore([pred_indices], targetData, idx2word, batchSize)
                     werScoreSum = werScoreSum + werScore
 
                 torch.cuda.empty_cache()

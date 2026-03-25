@@ -136,7 +136,16 @@ def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName):
             reader = csv.reader(f)
             for n, row in enumerate(reader):
                 if n != 0:
-                    words = row[3].split("/")
+                    # Robustly find Gloss column by looking for '/' separator
+                    gloss_idx = 3
+                    max_slashes = 0
+                    for i, col in enumerate(row):
+                        slashes = col.count('/')
+                        if slashes > max_slashes:
+                            max_slashes = slashes
+                            gloss_idx = i
+                    
+                    words = row[gloss_idx].split("/")
                     words = PreWords(words)
                     wordList += words
 
@@ -144,7 +153,16 @@ def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName):
             reader = csv.reader(f)
             for n, row in enumerate(reader):
                 if n != 0:
-                    words = row[3].split("/")
+                    # Robustly find Gloss column
+                    gloss_idx = 3
+                    max_slashes = 0
+                    for i, col in enumerate(row):
+                        slashes = col.count('/')
+                        if slashes > max_slashes:
+                            max_slashes = slashes
+                            gloss_idx = i
+
+                    words = row[gloss_idx].split("/")
                     words = PreWords(words)
                     wordList += words
 
@@ -152,7 +170,16 @@ def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName):
             reader = csv.reader(f)
             for n, row in enumerate(reader):
                 if n != 0:
-                    words = row[3].split("/")
+                    # Robustly find Gloss column
+                    gloss_idx = 3
+                    max_slashes = 0
+                    for i, col in enumerate(row):
+                        slashes = col.count('/')
+                        if slashes > max_slashes:
+                            max_slashes = slashes
+                            gloss_idx = i
+
+                    words = row[gloss_idx].split("/")
                     words = PreWords(words)
                     wordList += words
 
@@ -297,8 +324,18 @@ class MyDataset(Dataset):
                 reader = csv.reader(f)
                 for n, row in enumerate(reader):
                     if n != 0:
-                        # row[0] 是 Number (如 train-00001)，row[3] 是 Gloss
-                        lableDict[row[0]] = row[3]
+                        # Robustly find Gloss column by looking for '/' separator
+                        gloss_idx = 3
+                        max_slashes = 0
+                        for i, col in enumerate(row):
+                            slashes = col.count('/')
+                            if slashes > max_slashes:
+                                max_slashes = slashes
+                                gloss_idx = i
+                        
+                        # row[0] is Number (e.g. train-00001)
+                        if len(row) > 0:
+                            lableDict[row[0]] = row[gloss_idx]
 
             lable = {}
             for line in lableDict:

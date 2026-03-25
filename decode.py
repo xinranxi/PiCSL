@@ -21,6 +21,7 @@ class Decode(object):# CTC解码类
         self.num_classes = num_classes
         self.search_mode = search_mode
         self.blank_id = blank_id
+        self.log_probs_input = True
         self.vocab = [chr(x) for x in range(20000, 20000 + num_classes)]
         self.ctc_decoder = None
         if ctcdecode is not None:
@@ -32,7 +33,7 @@ class Decode(object):# CTC解码类
                     beam_width=10, 
                     blank_id=blank_id,
                     num_processes=10,
-                    log_probs_input=True
+                    log_probs_input=self.log_probs_input
                 )
                 print(f"CTCBeamDecoder initialized successfully with beam_width=10")
             except Exception as e:
@@ -56,14 +57,23 @@ class Decode(object):# CTC解码类
     def BeamSearch(self, nn_output, vid_lgt, probs=False):
         '''
         CTCBeamDecoder Shape:
-                - Input:  nn_output (B, T, N), which should be passed through a softmax layer
+                - Input:  nn_output (B, T, N)
+                          when log_probs_input=True: log-probabilities
+                          when log_probs_input=False: probabilities
                 - Output: beam_resuls (B, N_beams, T), int, need to be decoded by i2g_dict
                           beam_scores (B, N_beams), p=1/np.exp(beam_score)
                           timesteps (B, N_beams)
                           out_lens (B, N_beams)
         '''
-        if not probs:
-            nn_output = nn_output.softmax(-1).cpu()
+        if self.log_probs_input:
+            # Train.py already feeds LogSoftmax output; do NOT apply softmax again.
+            if probs:
+                nn_output = (nn_output + 1e-8).log()
+            nn_output = nn_output.cpu()
+        else:
+            if not probs:
+                nn_output = nn_output.softmax(-1)
+            nn_output = nn_output.cpu()
         vid_lgt = vid_lgt.cpu()
         beam_result, beam_scores, timesteps, out_seq_len = self.ctc_decoder.decode(nn_output, vid_lgt)
         ret_list = []
@@ -76,10 +86,8 @@ class Decode(object):# CTC解码类
             if len(tmp) > 0:
                 ret_list.append(tmp)
             else:
-                try:
-                    ret_list.append(ret_list[-1])
-                except:
-                    ret_list.append([('EMPTY', 0)])
+                # Keep empty decode for this sample; copying previous output corrupts WER/debug.
+                ret_list.append([])
 
         # 在 Beam Search 情况下，返回预测序列列表 + 最后一条的 token 索引（兼容 Train.py 的 unpack）
         return ret_list, first_result
