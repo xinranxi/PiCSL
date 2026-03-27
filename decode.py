@@ -77,20 +77,22 @@ class Decode(object):# CTC解码类
         vid_lgt = vid_lgt.cpu()
         beam_result, beam_scores, timesteps, out_seq_len = self.ctc_decoder.decode(nn_output, vid_lgt)
         ret_list = []
+        last_result = torch.tensor([])  # Track last valid result (fix: avoid reusing reference)
         for batch_idx in range(len(nn_output)):
             first_result = beam_result[batch_idx][0][:out_seq_len[batch_idx][0]]
             if len(first_result) != 0:
                 first_result = torch.stack([x[0] for x in groupby(first_result)])
+                last_result = first_result.clone()  # Clone to avoid reference issues
             tmp = [(self.i2g_dict[int(gloss_id)], idx) for idx, gloss_id in
                              enumerate(first_result)]
             if len(tmp) > 0:
                 ret_list.append(tmp)
             else:
-                # Keep empty decode for this sample; copying previous output corrupts WER/debug.
+                # Keep empty decode for this sample; DO NOT copy previous output (corrupts WER)
                 ret_list.append([])
 
-        # 在 Beam Search 情况下，返回预测序列列表 + 最后一条的 token 索引（兼容 Train.py 的 unpack）
-        return ret_list, first_result
+        # 在 Beam Search 情况下，返回预测序列列表 + 最后一条有效的 token 索引（已克隆，避免引用问题）
+        return ret_list, last_result
 
     def MaxDecode(self, nn_output, vid_lgt):
         index_list = torch.argmax(nn_output, axis=2)

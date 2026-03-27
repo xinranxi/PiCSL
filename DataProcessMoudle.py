@@ -1,9 +1,9 @@
-#是数据处理模块：实现文本预处理（PreWords）、根据不同数据集构建词表（Word2Id）、
-# 定义用于多数据集的视频帧加载与标签映射的 PyTorch Dataset（MyDataset）、批次拼接/填充函数（collate_fn）
+#是数据处理模块：实现文本预处理（PreWords）、CE-CSL 词表构建（Word2Id）、
+# 定义 CE-CSL 视频加载与标签映射的 PyTorch Dataset（MyDataset）、批次拼接/填充函数（collate_fn）
 # 序列重塑与 CTC 解码/去空白工具（DataReshape、RemoveBlank、CTCGreedyDecode）
 # 预测输出写文件（write2file）及一个用于序列级知识蒸馏的损失类（SeqKD）
 
-# 支持数据集：RWTH、RWTH‑T、CSL、CSL‑Daily、CE‑CSL。
+# 支持数据集：CE-CSL。
 
 # 目的：通过 PreWords / Word2Id 对不同数据集的标签做清洗与规范（去括号、统一标点/数字等）
 # 生成词表并映射成 word2idx，供 MyDataset 加载视频帧与标签用于训练/CTC 解码。
@@ -16,7 +16,6 @@ from torch.utils.data import Dataset
 import numpy as np
 import torch.nn.functional as F
 import torch.nn as nn
-import pickle
 import cv2
 
 PAD = ' '
@@ -65,123 +64,28 @@ def PreWords(words):# 预处理文本
     return words
 
 def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName):
-    if dataSetName == "RWTH":
-        wordList = []
-        with open(trainLabelPath, 'r', encoding="utf-8") as f:
+    if dataSetName != "CE-CSL":
+        raise ValueError(f"This project currently supports CE-CSL only, got: {dataSetName}")
+
+    wordList = []
+    for label_path in [trainLabelPath, validLabelPath, testLabelPath]:
+        with open(label_path, 'r', encoding="utf-8") as f:
             reader = csv.reader(f)
             for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[3].split()
-                    wordList += words
+                if n == 0:
+                    continue
+                # Robustly find Gloss column by looking for '/' separator.
+                gloss_idx = 3
+                max_slashes = 0
+                for i, col in enumerate(row):
+                    slashes = col.count('/')
+                    if slashes > max_slashes:
+                        max_slashes = slashes
+                        gloss_idx = i
 
-        with open(validLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[3].split()
-                    wordList += words
-
-        with open(testLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[3].split()
-                    wordList += words
-    elif dataSetName == "RWTH-T":
-        wordList = []
-        with open(trainLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[5].split()
-                    wordList += words
-
-        with open(validLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[5].split()
-                    wordList += words
-
-        with open(testLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    rowStrList = row[0].split("|")
-                    words = rowStrList[5].split()
-                    wordList += words
-    elif dataSetName == "CSL":
-        with open(trainLabelPath, "r", encoding="utf-8") as f:
-            sourceStr = f.read()
-
-        txtStr = sourceStr.split()[1::2]
-
-        for i, s in enumerate(txtStr):
-            txtStr[i] = s.strip("\ufeff")
-
-        wordList = ''.join((x for x in txtStr))
-    elif dataSetName == "CSL-Daily":
-        # with open("/home/lj/lj/program/python/SLR20240523/data/CSL-Daily/csl2020ct_v2.pkl", 'rb') as f:
-        with open("D:\\VS code demo\\TFNet-main\\data\\CSL-Daily\\csl2020ct_v2.pkl", 'rb') as f:
-            data = pickle.load(f)
-        wordList = data["gloss_map"]
-    elif dataSetName == "CE-CSL":
-        wordList = []
-        with open(trainLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    # Robustly find Gloss column by looking for '/' separator
-                    gloss_idx = 3
-                    max_slashes = 0
-                    for i, col in enumerate(row):
-                        slashes = col.count('/')
-                        if slashes > max_slashes:
-                            max_slashes = slashes
-                            gloss_idx = i
-                    
-                    words = row[gloss_idx].split("/")
-                    words = PreWords(words)
-                    wordList += words
-
-        with open(validLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    # Robustly find Gloss column
-                    gloss_idx = 3
-                    max_slashes = 0
-                    for i, col in enumerate(row):
-                        slashes = col.count('/')
-                        if slashes > max_slashes:
-                            max_slashes = slashes
-                            gloss_idx = i
-
-                    words = row[gloss_idx].split("/")
-                    words = PreWords(words)
-                    wordList += words
-
-        with open(testLabelPath, 'r', encoding="utf-8") as f:
-            reader = csv.reader(f)
-            for n, row in enumerate(reader):
-                if n != 0:
-                    # Robustly find Gloss column
-                    gloss_idx = 3
-                    max_slashes = 0
-                    for i, col in enumerate(row):
-                        slashes = col.count('/')
-                        if slashes > max_slashes:
-                            max_slashes = slashes
-                            gloss_idx = i
-
-                    words = row[gloss_idx].split("/")
-                    words = PreWords(words)
-                    wordList += words
+                words = row[gloss_idx].split("/")
+                words = PreWords(words)
+                wordList += words
 
     idx2word = [PAD]
     set2list = sorted(list(set(wordList)))
@@ -205,166 +109,54 @@ class MyDataset(Dataset):
         self.random_drop = True
         self.isTrain = isTrain
 
-        if dataSetName == "RWTH":
-            lableDict = {}
-            with open(LabelPath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for n, row in enumerate(reader):
-                    if n != 0:
-                        rowStrList = row[0].split("|")
-                        lableDict[rowStrList[0]] = rowStrList[-1]
+        if dataSetName != "CE-CSL":
+            raise ValueError(f"This project currently supports CE-CSL only, got: {dataSetName}")
 
-            lable = {}
-            for line in lableDict:
-                sentences = lableDict[line].split()
-
-                txtInt = []
-                for i in sentences:
-                    txtInt.append(word2idx[i])
-
-                lable[line] = txtInt
-
-            fileName = sorted(os.listdir(ImagePath))
-
-            imgs = []
-            for name in fileName:
-                try:
-                    imageSeqPath = os.path.join(ImagePath, name)
-                    imgs.append((imageSeqPath, lable[name]))  # 路径和标签添加到列表中
-                except:
-                    print(name)
-        elif dataSetName == "RWTH-T":
-            lableDict = {}
-            with open(LabelPath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for n, row in enumerate(reader):
-                    if n != 0:
-                        rowStrList = row[0].split("|")
-                        lableDict[rowStrList[0]] = rowStrList[-2]
-
-            lable = {}
-            for line in lableDict:
-                sentences = lableDict[line].split()
-
-                txtInt = []
-                for i in sentences:
-                    txtInt.append(word2idx[i])
-
-                lable[line] = txtInt
-
-            fileName = sorted(os.listdir(ImagePath))
-
-            imgs = []
-            for name in fileName:
-                try:
-                    imageSeqPath = os.path.join(ImagePath, name)
-                    imgs.append((imageSeqPath, lable[name]))  # 路径和标签添加到列表中
-                except:
-                    print(name)
-        elif dataSetName == "CSL":
-            lableDict = {}
-            with open(LabelPath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for n, row in enumerate(reader):
-                    rowStrList = row[0].split()
-                    lableDict[rowStrList[0]] = rowStrList[-1]
-
-            lable = {}
-            for line in lableDict:
-                sentences = lableDict[line]
-                sentences = sentences.strip("\ufeff")
-
-                txtInt = []
-                for i in sentences:
-                    try:
-                        txtInt.append(word2idx[i])
-                    except:
-                        print(sentences)
-
-                lable[line] = txtInt
-
-            fileName = sorted(os.listdir(ImagePath))
-
-            imgs = []
-            for name in fileName:
-                imageSeqPath = os.path.join(ImagePath, name)
-
-                ImageSeq = sorted(os.listdir(imageSeqPath))
-
-                for i in ImageSeq:
-                    frames = os.path.join(imageSeqPath, i)
-                    imgs.append((frames, lable[name]))  # 路径和标签添加到列表中
-        elif dataSetName == "CSL-Daily":
-            with open("/home/lj/lj/program/python/SLR20240523/data/CSL-Daily/csl2020ct_v2.pkl", 'rb') as f:
-                data = pickle.load(f)
-
-            info = data["info"]
-
-            lable = {}
-            for n, value in enumerate(info):
-                txtInt = []
-                for i, gloss in enumerate(value["label_gloss"]):
-                    txtInt.append(word2idx[gloss])
-
-                lable[value["name"]] = txtInt
-
-            imgs = []
-            with open(LabelPath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for n, row in enumerate(reader):
-                    rowStrList = row[0].split("|")
-                    frames = os.path.join(ImagePath, rowStrList[0])
-                    try:
-                        imgs.append((frames, lable[rowStrList[0]]))
-                    except:
-                        print(rowStrList[0])
-        elif dataSetName == "CE-CSL":
-            lableDict = {}
-            with open(LabelPath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for n, row in enumerate(reader):
-                    if n != 0:
-                        # Robustly find Gloss column by looking for '/' separator
-                        gloss_idx = 3
-                        max_slashes = 0
-                        for i, col in enumerate(row):
-                            slashes = col.count('/')
-                            if slashes > max_slashes:
-                                max_slashes = slashes
-                                gloss_idx = i
-                        
-                        # row[0] is Number (e.g. train-00001)
-                        if len(row) > 0:
-                            lableDict[row[0]] = row[gloss_idx]
-
-            lable = {}
-            for line in lableDict:
-                sentences = lableDict[line].split("/")
-                sentences = PreWords(sentences)
-
-                txtInt = []
-                for i in sentences:
-                    txtInt.append(word2idx[i])
-
-                lable[line] = txtInt
-
-            # ImagePath 指向 CE-CSL/train，下面是 A/ 目录
-            fileNames = sorted(os.listdir(ImagePath)) # ['A']
-
-            imgs = []
-            for name in fileNames:
-                dirPath = os.path.join(ImagePath, name) # CE-CSL/train/A
-                if not os.path.isdir(dirPath):
+        lableDict = {}
+        with open(LabelPath, 'r', encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for n, row in enumerate(reader):
+                if n == 0:
                     continue
-                videoFiles = sorted(os.listdir(dirPath)) # ['train-00001.mp4', ...]
-                for videoFile in videoFiles:
-                    # 匹配标签，假设视频文件名(不含后缀)就是 Number
-                    videoName = os.path.splitext(videoFile)[0]
-                    if videoName in lable:
-                        videoPath = os.path.join(dirPath, videoFile)
-                        imgs.append((videoPath, lable[videoName]))
-                    else:
-                        print(f"Warning: No label for video {videoName}")
+                # Robustly find Gloss column by looking for '/' separator.
+                gloss_idx = 3
+                max_slashes = 0
+                for i, col in enumerate(row):
+                    slashes = col.count('/')
+                    if slashes > max_slashes:
+                        max_slashes = slashes
+                        gloss_idx = i
+
+                if len(row) > 0:
+                    lableDict[row[0]] = row[gloss_idx]
+
+        lable = {}
+        for line in lableDict:
+            sentences = lableDict[line].split("/")
+            sentences = PreWords(sentences)
+
+            txtInt = []
+            for i in sentences:
+                txtInt.append(word2idx[i])
+
+            lable[line] = txtInt
+
+        # ImagePath 指向 CE-CSL/{train|dev|test}，下一级是 A/B/... 文件夹。
+        fileNames = sorted(os.listdir(ImagePath))
+
+        imgs = []
+        for name in fileNames:
+            dirPath = os.path.join(ImagePath, name)
+            if not os.path.isdir(dirPath):
+                continue
+            videoFiles = sorted(os.listdir(dirPath))
+            for videoFile in videoFiles:
+                videoName = os.path.splitext(videoFile)[0]
+                if videoName in lable:
+                    videoPath = os.path.join(dirPath, videoFile)
+                    imgs.append((videoPath, lable[videoName]))
+                else:
+                    print(f"Warning: No label for video {videoName}")
 
         self.imgs = imgs
 
@@ -374,112 +166,35 @@ class MyDataset(Dataset):
 
     def __getitem__(self, index):
         fn, label = self.imgs[index]# 通过index索引返回一个图像路径fn 与 标签label
-        if self.dataSetName == "RWTH":
-            info = fn.split("/")[-1]
+        if self.dataSetName != "CE-CSL":
+            raise ValueError(f"This project currently supports CE-CSL only, got: {self.dataSetName}")
 
-            imageSeqPath = os.path.join(fn, "1")
+        # fn 是视频文件路径，如 CE-CSL/train/A/train-00001.mp4
+        info = os.path.basename(fn)
 
-            ImageSeq = sorted(os.listdir(imageSeqPath))
+        cap = cv2.VideoCapture(fn)
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, (224, 224))
+            frames.append(frame)
+        cap.release()
 
-            indices = self.sample_indices(len(ImageSeq))
+        if len(frames) == 0:
+            print(f"Warning: Video {fn} has 0 frames!")
+            return {"video": torch.zeros((1, 3, 224, 224)), "label": label, "info": info}
 
-            frames = [os.path.join(imageSeqPath, i) for i in ImageSeq]
-            frames = [frames[i] for i in indices]
+        indices = self.sample_indices(len(frames))
+        frames = [frames[i] for i in indices]
 
-            imgSeq = [cv2.resize(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB), (256, 256)) for img_path in frames]
-
-            imgSeq = self.transform(imgSeq)
+        imgSeq = self.transform(frames)
+        if isinstance(imgSeq, torch.Tensor):
             imgSeq = imgSeq.float() / 127.5 - 1
-        elif self.dataSetName == "RWTH-T":
-            info = fn.split("/")[-1]
-
-            imageSeqPath = fn
-
-            ImageSeq = sorted(os.listdir(imageSeqPath))
-
-            indices = self.sample_indices(len(ImageSeq))
-
-            frames = [os.path.join(imageSeqPath, i) for i in ImageSeq]
-            frames = [frames[i] for i in indices]
-
-            imgSeq = [cv2.resize(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB), (256, 256)) for img_path in frames]
-
-            imgSeq = self.transform(imgSeq)
-            imgSeq = imgSeq.float() / 127.5 - 1
-        elif self.dataSetName == "CSL":
-            # 图片序列
-            info = fn.split("/")[-1]
-
-            ImagePath = fn
-
-            ImageSeq = sorted(os.listdir(fn))
-            # 读取多序列图片
-            for i, image in enumerate(ImageSeq):
-                imageSeqPath = os.path.join(ImagePath, image)
-                ImgSeq = cv2.cvtColor(cv2.imread(imageSeqPath), cv2.COLOR_BGR2RGB)
-                seqShape = ImgSeq.shape
-                frames1 = ImgSeq.reshape((seqShape[0] // seqShape[1], seqShape[1], seqShape[1], seqShape[2]))
-                if i != 0:
-                    frames = np.concatenate((frames, frames1), axis=0)
-                else:
-                    frames = frames1
-
-            imageSize = 256
-
-            imgSeq = [cv2.resize(img, (imageSize, imageSize)) for img in frames]
-            indices = self.sample_indices(len(imgSeq) // 2)
-            imgSeq = [imgSeq[i*2] for i in indices]
-
-            imgSeq = self.transform(imgSeq)
-            imgSeq = imgSeq.float() / 127.5 - 1
-        elif self.dataSetName == "CSL-Daily":
-            info = fn
-            imageSeqPath = fn
-
-            ImageSeq = sorted(os.listdir(imageSeqPath))
-
-            indices = self.sample_indices(len(ImageSeq))
-
-            frames = [os.path.join(imageSeqPath, i) for i in ImageSeq]
-            frames = [frames[i] for i in indices]
-
-            imgSeq = [cv2.resize(cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB), (256, 256)) for img_path in
-                      frames]
-
-            imgSeq = self.transform(imgSeq)
-            imgSeq = imgSeq.float() / 127.5 - 1
-        elif self.dataSetName == "CE-CSL":
-            # fn 是视频文件路径，如 CE-CSL/train/A/train-00001.mp4
-            info = os.path.basename(fn)
-            
-            cap = cv2.VideoCapture(fn)
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                # 转换颜色空间并调整大小
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = cv2.resize(frame, (224, 224)) # 匹配 MobileNetV2 输入
-                frames.append(frame)
-            cap.release()
-
-            if len(frames) == 0:
-                print(f"Warning: Video {fn} has 0 frames!")
-                # 返回一个空样本 or 处理错误
-                return {"video": torch.zeros((1, 3, 224, 224)), "label": label, "info": info}
-
-            indices = self.sample_indices(len(frames))
-            frames = [frames[i] for i in indices]
-
-            # 应用增强 (Compose 包含 ToTensor)
-            imgSeq = self.transform(frames)
-            # 归一化 (参考其他数据集逻辑: float() / 127.5 - 1)
-            if isinstance(imgSeq, torch.Tensor):
-                imgSeq = imgSeq.float() / 127.5 - 1
-            else:
-                # 如果 transform 后还是 list (不应该，因为包含了 ToTensor)
-                imgSeq = [torch.from_numpy(f).float() / 127.5 - 1 for f in imgSeq]
+        else:
+            imgSeq = [torch.from_numpy(f).float() / 127.5 - 1 for f in imgSeq]
 
         sample = {"video": imgSeq, "label": label, "info": info}
 

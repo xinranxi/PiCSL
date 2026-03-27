@@ -10,22 +10,22 @@ def get_config_path():
 def readConfig():
     # 默认配置参数
     configParams = {
-        "trainDataPath":"data\RWTH\\train",
-        "validDataPath": "data\RWTH\\valid",
-        "testDataPath": "data\RWTH\\test",
-        "trainLabelPath": "data\RWTH\\train.corpus.csv",
-        "validLabelPath": "data\RWTH\\dev.corpus.csv",
-        "testLabelPath": "data\RWTH\\test.corpus.csv",
-        "bestModuleSavePath": "module/bestMoudleNet.pth",
-        "currentModuleSavePath": "module/currentMoudleNet.pth",
+        "trainDataPath": "CE-CSL/train",
+        "validDataPath": "CE-CSL/dev",
+        "testDataPath": "CE-CSL/test",
+        "trainLabelPath": "CE-CSL/train.csv",
+        "validLabelPath": "CE-CSL/dev.csv",
+        "testLabelPath": "CE-CSL/test.csv",
+        "bestModuleSavePath": "module/bestMoudleLightTFNet.pth",
+        "currentModuleSavePath": "module/currentMoudleLightTFNet.pth",
         "device": 1, # 0:CPU  1:GPU
-        "hiddenSize":512,
-        "lr": 0.1,
-        "batchSize": 1,
+        "hiddenSize": 1024,
+        "lr": 0.0001,
+        "batchSize": 2,
         "numWorkers": 2,
         "pinmMemory": 1,
         "moduleChoice": "LightTFNet",
-        "dataSetName": "RWTH",
+        "dataSetName": "CE-CSL",
     }
 
     configPath = get_config_path()
