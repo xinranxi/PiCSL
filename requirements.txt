@@ -5,3 +5,5 @@ opencv-python
 tqdm
 six
 requests
+Pillow
+scipy

@@ -72,7 +72,7 @@ def edit_distance(r, h):
         r -> the list of words produced by splitting reference sentence.
         h -> the list of words produced by splitting hypothesis sentence.
     """
-    d = np.zeros((len(r) + 1) * (len(h) + 1), dtype=np.uint8).reshape(
+    d = np.zeros((len(r) + 1) * (len(h) + 1), dtype=np.int32).reshape(
         (len(r) + 1, len(h) + 1)
     )
     for i in range(len(r) + 1):

@@ -51,7 +51,9 @@ class BiLSTMLayer(nn.Module):
         # src_lens: 每个样本的序列长度 (batch_size,)
         # 先将变长序列打包（packed），以供 PyTorch RNN 高效处理
         # (max_src_len, batch_size, D)
-        packed_emb = nn.utils.rnn.pack_padded_sequence(src_feats, src_lens)
+        if src_lens is not None and torch.is_tensor(src_lens):
+            src_lens = src_lens.detach().cpu()
+        packed_emb = nn.utils.rnn.pack_padded_sequence(src_feats, src_lens, enforce_sorted=False)
 
         # rnn(gru) returns:
         # - packed_outputs: shape same as packed_emb

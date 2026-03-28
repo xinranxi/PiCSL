@@ -2,8 +2,23 @@ __pycache__/
 *.pyc
 .DS_Store
 .vscode/
+*.log
+*.tmp
+*.ctm
+*.stm
 # Ignore potentially large data files
 CE-CSL/
 # If there are model checkpoints, ignore them too
 params/*.pth
 params/*.pkl
+module/*.pth
+CSL/color/
+wer/
+train_logs/
+test_reports/
+colab_bundle/
+*.zip
+evaluation/tmp.stm
+evaluation/tmp2.ctm
+evaluationT/tmp.stm
+evaluationT/tmp2.ctm

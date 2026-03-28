@@ -80,6 +80,14 @@ def _indices_to_gloss(indices, idx2word):
             tokens.append(idx2word[v])
     return " ".join(tokens)
 
+def _blank_prob_stats(log_probs):
+    blank_probs = log_probs.detach().exp()[..., 0]
+    return {
+        "mean": blank_probs.mean().item(),
+        "min": blank_probs.min().item(),
+        "max": blank_probs.max().item(),
+    }
+
 def train(configParams, isTrain=True, isCalc=False):
     # 参数初始化
     # 读入数据路径
@@ -102,17 +110,32 @@ def train(configParams, isTrain=True, isCalc=False):
     pinmMemory = bool(int(configParams["pinmMemory"]))
     moduleChoice = configParams["moduleChoice"]
     dataSetName = configParams["dataSetName"]
-    if dataSetName != "CE-CSL":
-        raise ValueError(f"This project currently supports CE-CSL only, got: {dataSetName}")
+    if dataSetName not in ("CE-CSL", "CSL"):
+        raise ValueError(f"Unsupported dataset: {dataSetName}. Supported: CE-CSL, CSL")
     gradAccumSteps = max(1, int(configParams.get("gradAccumSteps", 8)))
     maxGradNorm = float(configParams.get("maxGradNorm", 5.0))
     freezeBackboneEpochs = max(0, int(configParams.get("freezeBackboneEpochs", 3)))
     backboneLrScale = float(configParams.get("backboneLrScale", 0.1))
+    maxEpochs = max(1, int(configParams.get("maxEpochs", 55)))
+    maxTrainBatches = max(0, int(configParams.get("maxTrainBatches", 0)))
+    maxValidBatches = max(0, int(configParams.get("maxValidBatches", 0)))
+    maxTestBatches = max(0, int(configParams.get("maxTestBatches", 0)))
+    frameSampleStride = max(1, int(configParams.get("frameSampleStride", 1)))
+    cnnChunkSize = max(1, int(configParams.get("cnnChunkSize", 64)))
+    useAmp = bool(int(configParams.get("useAmp", 1)))
     max_num_states = 1
 
     # 预处理语言序列
-    word2idx, wordSetNum, idx2word = DataProcessMoudle.Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName)
-    # 图像预处理：与 TFNet-main 对齐，保留翻转和颜色抖动。
+    word2idx, wordSetNum, idx2word = DataProcessMoudle.Word2Id(
+        trainLabelPath, validLabelPath, testLabelPath, dataSetName,
+        trainDataPath=trainDataPath, validDataPath=validDataPath, testDataPath=testDataPath
+    )
+    print(f"diagVocab size(without blank): {wordSetNum}, tokens: {' '.join(idx2word[1:])}")
+    for save_path in [bestModuleSavePath, currentModuleSavePath, 'module/bestMoudleNet_1.pth']:
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+    # 图像预处理：回退到较稳健的中等增强强度，避免强扰动导致 CTC 训练不稳定。
     transform = videoAugmentation.Compose([
         videoAugmentation.RandomCrop(224),
         videoAugmentation.RandomHorizontalFlip(0.5),
@@ -127,21 +150,33 @@ def train(configParams, isTrain=True, isCalc=False):
     ])
 
     # 导入数据
-    trainData = DataProcessMoudle.MyDataset(trainDataPath, trainLabelPath, word2idx, dataSetName, isTrain=True, transform=transform)
+    trainData = DataProcessMoudle.MyDataset(
+        trainDataPath, trainLabelPath, word2idx, dataSetName,
+        isTrain=True, transform=transform, frameSampleStride=frameSampleStride
+    )
 
-    validData = DataProcessMoudle.MyDataset(validDataPath, validLabelPath, word2idx, dataSetName, transform=transformTest)
+    validData = DataProcessMoudle.MyDataset(
+        validDataPath, validLabelPath, word2idx, dataSetName,
+        transform=transformTest, frameSampleStride=frameSampleStride
+    )
 
-    testData = DataProcessMoudle.MyDataset(testDataPath, testLabelPath, word2idx, dataSetName, transform=transformTest)
+    testData = DataProcessMoudle.MyDataset(
+        testDataPath, testLabelPath, word2idx, dataSetName,
+        transform=transformTest, frameSampleStride=frameSampleStride
+    )
 
     trainLoader = DataLoader(dataset=trainData, batch_size=batchSize, shuffle=True, num_workers=numWorkers,
                              pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=True)
     validLoader = DataLoader(dataset=validData, batch_size=1, shuffle=False, num_workers=numWorkers,
-                             pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=True)
+                             pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=False)
     testLoader = DataLoader(dataset=testData, batch_size=1, shuffle=False, num_workers=numWorkers,
-                            pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=True)
+                            pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=False)
 
     # 定义模型
-    moduleNet = Net.moduleNet(hiddenSize, wordSetNum * max_num_states + 1, moduleChoice, device, dataSetName, True)
+    moduleNet = Net.moduleNet(
+        hiddenSize, wordSetNum * max_num_states + 1, moduleChoice,
+        device, dataSetName, True, cnnChunkSize=cnnChunkSize
+    )
     moduleNet = moduleNet.to(device)
 
     # 损失函数定义
@@ -180,7 +215,7 @@ def train(configParams, isTrain=True, isCalc=False):
 
     lastEpoch = -1
     if os.path.exists(currentModuleSavePath):
-        checkpoint = torch.load(currentModuleSavePath, map_location=torch.device('cpu'))
+        checkpoint = torch.load(currentModuleSavePath, map_location=torch.device('cpu'), weights_only=False)
         try:
             moduleNet.load_state_dict(checkpoint['moduleNet_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -219,8 +254,13 @@ def train(configParams, isTrain=True, isCalc=False):
             f"maxGradNorm={maxGradNorm}, freezeBackboneEpochs={freezeBackboneEpochs}, "
             f"backboneLrScale={backboneLrScale}"
         )
+        print(
+            f"diagRuntime settings: maxEpochs={maxEpochs}, maxTrainBatches={maxTrainBatches}, "
+            f"maxValidBatches={maxValidBatches}, frameSampleStride={frameSampleStride}, "
+            f"cnnChunkSize={cnnChunkSize}, useAmp={useAmp}"
+        )
         # 训练模型
-        epochNum = 55
+        epochNum = maxEpochs
         maxTrainWerBatches = 40
 
         if -1 != lastEpoch:
@@ -240,7 +280,7 @@ def train(configParams, isTrain=True, isCalc=False):
                     moduleNet.conv2d.eval()
             print(f"diagTrain backbone_frozen: {freeze_backbone}")
 
-            scaler = GradScaler()
+            scaler = GradScaler(enabled=(device.type == "cuda" and useAmp))
             loss_value = []
             trainWerScoreSum = 0.0
             trainWerSampleCount = 0
@@ -251,7 +291,11 @@ def train(configParams, isTrain=True, isCalc=False):
             invalidCtcBatchCount = 0
             invalidCtcSampleCount = 0
             optimizer.zero_grad(set_to_none=True)
+            effective_train_batches = maxTrainBatches if maxTrainBatches > 0 else len(trainLoader)
+            successful_backward_batches = 0
             for step_idx, Dict in enumerate(tqdm(stable(trainLoader, seed + epoch))):
+                if step_idx >= effective_train_batches:
+                    break
                 try:
                     data = Dict["video"].to(device)
                     label = Dict["label"]
@@ -262,7 +306,7 @@ def train(configParams, isTrain=True, isCalc=False):
                     targetLengths = torch.tensor(list(map(len, targetOutData)))
                     targetOutData = torch.cat(targetOutData, dim=0).to(device)
 
-                    with autocast():
+                    with autocast(enabled=(device.type == "cuda" and useAmp)):
                         logProbs1, logProbs2, logProbs3, logProbs4, logProbs5, lgt, x1, x2, x3 = moduleNet(data, dataLen, True)
                 except Exception as e:
                     print("\n" + "="*50)
@@ -270,7 +314,7 @@ def train(configParams, isTrain=True, isCalc=False):
                     import traceback
                     traceback.print_exc()
                     print("="*50)
-                    exit(1)
+                    raise RuntimeError(f"Training loop failed at epoch={epoch}, step={step_idx}") from e
 
                 #########################################
                 if "MSTNet" == moduleChoice:
@@ -336,8 +380,8 @@ def train(configParams, isTrain=True, isCalc=False):
                     invalidCtcBatchCount += 1
                     invalidCtcSampleCount += int(invalid_mask.sum().item())
 
-                blank_prob = logProbs1.detach().exp()[..., 0].mean().item()
-                trainBlankProb.append(blank_prob)
+                blank_prob_stats = _blank_prob_stats(logProbs1)
+                trainBlankProb.append(blank_prob_stats["mean"])
 
                 if trainWerBatchCount < maxTrainWerBatches:
                     with torch.no_grad():
@@ -356,7 +400,8 @@ def train(configParams, isTrain=True, isCalc=False):
                     trainWerBatchCount += 1
 
                 scaler.scale(loss / gradAccumSteps).backward()
-                should_step = ((step_idx + 1) % gradAccumSteps == 0) or ((step_idx + 1) == len(trainLoader))
+                successful_backward_batches += 1
+                should_step = (successful_backward_batches % gradAccumSteps == 0)
                 if should_step:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(moduleNet.parameters(), maxGradNorm)
@@ -367,7 +412,15 @@ def train(configParams, isTrain=True, isCalc=False):
                 if "loss" in locals():
                     loss_value.append(loss.item())
 
-                torch.cuda.empty_cache()
+                if device.type == "cuda" and ((step_idx + 1) % max(50, gradAccumSteps) == 0):
+                    torch.cuda.empty_cache()
+
+            if successful_backward_batches > 0 and (successful_backward_batches % gradAccumSteps != 0):
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(moduleNet.parameters(), maxGradNorm)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
 
             print("epoch: %d, trainLoss: %.5f, lr: %f" % (
             epoch, np.mean(loss_value), optimizer.param_groups[0]['lr']))
@@ -378,7 +431,7 @@ def train(configParams, isTrain=True, isCalc=False):
                 print(f"diagTrain pred_len stats: {_format_stats(trainPredLens)}")
                 print(f"diagTrain lgt stats: {_format_stats(trainLgtLens)}")
             if trainBlankProb:
-                print(f"diagTrain blank_prob_mean: {np.mean(trainBlankProb):.4f}")
+                print(f"diagTrain blank_prob_mean: {np.mean(trainBlankProb):.6f}")
             if invalidCtcBatchCount > 0:
                 print(
                     f"diagTrain invalid_ctc: batches={invalidCtcBatchCount}, "
@@ -399,7 +452,11 @@ def train(configParams, isTrain=True, isCalc=False):
             validPredLens = []
             validLgtLens = []
             validBlankProb = []
-            for Dict in tqdm(validLoader):
+            validWerSampleCount = 0
+            effective_valid_batches = maxValidBatches if maxValidBatches > 0 else len(validLoader)
+            for valid_idx, Dict in enumerate(tqdm(validLoader)):
+                if valid_idx >= effective_valid_batches:
+                    break
                 data = Dict["video"].to(device)
                 label = Dict["label"]
                 dataLen = Dict["videoLength"]
@@ -415,7 +472,8 @@ def train(configParams, isTrain=True, isCalc=False):
                     logProbs1, logProbs2, logProbs3, logProbs4, logProbs5, lgt, x1, x2, x3 = moduleNet(data, dataLen, False)
 
                     logProbs1 = logSoftMax(logProbs1)
-                    validBlankProb.append(logProbs1.exp()[..., 0].mean().item())
+                    valid_blank_prob_stats = _blank_prob_stats(logProbs1)
+                    validBlankProb.append(valid_blank_prob_stats["mean"])
 
                     if "MSTNet" == moduleChoice or "LightTFNet" == moduleChoice:
                         loss1 = ctcLoss(logProbs1, targetOutData, lgt, targetLengths)
@@ -435,33 +493,54 @@ def train(configParams, isTrain=True, isCalc=False):
                 total_info += info
                 total_sent += pred
 
-                pred_indices = _pred_to_indices(pred, word2idx)
-                validPredLens.append(len(pred_indices))
+                pred_batch_indices = _pred_batch_to_indices(pred, word2idx)
+                if len(pred_batch_indices) < batchSize:
+                    pred_batch_indices.extend([[] for _ in range(batchSize - len(pred_batch_indices))])
 
-                # Debug: compare one-sample reference and hypothesis for CE-CSL.
-                ref_indices = targetData[0].tolist() if hasattr(targetData[0], "tolist") else targetData[0]
-                ref_sent = _indices_to_gloss(ref_indices, idx2word)
-                hyp_sent = _indices_to_gloss(pred_indices, idx2word)
-                raw_len = int(dataLen[0].item()) if torch.is_tensor(dataLen[0]) else int(dataLen[0])
-                eff_len = int(lgt[0].item()) if torch.is_tensor(lgt[0]) else int(lgt[0])
-                validLgtLens.append(eff_len)
-                print(f"\n[DEBUG Epoch {epoch}] Sample ID: {info[0] if info else 'unknown'}")
-                print(f"Len: raw={raw_len}, lgt={eff_len}")
-                print(f"Ref: {ref_sent}")
-                print(f"Hyp: {hyp_sent} (pred_len={len(pred_indices)})")
-                if ref_sent.strip() != hyp_sent.strip():
-                    print("--> MISMATCH detected!")
+                if torch.is_tensor(lgt):
+                    validLgtLens.extend(lgt.detach().view(-1).cpu().tolist())
+                elif isinstance(lgt, list):
+                    for x in lgt:
+                        validLgtLens.append(float(x.item()) if torch.is_tensor(x) else float(x))
 
-                werScore = WerScore([pred_indices], targetData, idx2word, batchSize)
-                werScoreSum = werScoreSum + werScore
+                for bi in range(batchSize):
+                    pred_indices = pred_batch_indices[bi] if bi < len(pred_batch_indices) else []
+                    validPredLens.append(len(pred_indices))
+
+                    # Debug: compare one-sample reference and hypothesis for CE-CSL.
+                    ref_indices = targetData[bi].tolist() if hasattr(targetData[bi], "tolist") else targetData[bi]
+                    ref_sent = _indices_to_gloss(ref_indices, idx2word)
+                    hyp_sent = _indices_to_gloss(pred_indices, idx2word)
+                    if bi == 0:
+                        raw_len = int(dataLen[bi].item()) if torch.is_tensor(dataLen[bi]) else int(dataLen[bi])
+                        eff_len = int(lgt[bi].item()) if torch.is_tensor(lgt[bi]) else int(lgt[bi])
+                        if logProbs1.dim() == 3:
+                            sample_blank_prob = logProbs1[:, bi, 0].detach().exp().mean().item()
+                        else:
+                            sample_blank_prob = logProbs1[..., 0].detach().exp().mean().item()
+                        print(f"\n[DEBUG Epoch {epoch}] Sample ID: {info[bi] if info else 'unknown'}")
+                        print(f"Len: raw={raw_len}, lgt={eff_len}")
+                        print(f"Ref: {ref_sent}")
+                        print(f"Hyp: {hyp_sent} (pred_len={len(pred_indices)})")
+                        print(f"blank_prob: {sample_blank_prob:.6f}")
+                        if ref_sent.strip() != hyp_sent.strip():
+                            print("--> MISMATCH detected!")
+
+                    werScoreSum += WerScore([pred_indices], [targetData[bi]], idx2word, 1)
+                    validWerSampleCount += 1
             if not os.path.exists('./wer/'):
                 os.makedirs('./wer/')
 
-            torch.cuda.empty_cache()
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
             currentLoss = np.mean(loss_value)
 
-            werScore = werScoreSum / len(validLoader)
+            werScore = werScoreSum / max(1, validWerSampleCount)
+
+            if currentLoss < bestLoss:
+                bestLoss = currentLoss
+                bestLossEpoch = epoch - 1
 
             if werScore < bestWerScore:
                 bestWerScore = werScore
@@ -476,9 +555,6 @@ def train(configParams, isTrain=True, isCalc=False):
                 moduleDict['bestWerScoreEpoch'] = bestWerScoreEpoch
                 moduleDict['epoch'] = epoch
                 torch.save(moduleDict, bestModuleSavePath)
-
-            bestLoss = currentLoss
-            bestLossEpoch = epoch - 1
 
             moduleDict = {}
             moduleDict['moduleNet_state_dict'] = moduleNet.state_dict()
@@ -497,17 +573,20 @@ def train(configParams, isTrain=True, isCalc=False):
             DataProcessMoudle.write2file('./wer/' + "output-hypothesis-{}{:0>4d}.ctm".format('dev', epoch), total_info, total_sent)
 
             print(f"validLoss: {currentLoss:.5f}, werScore: {werScore:.2f}")
-            print(f"bestLoss: {bestLoss:.5f}, beatEpoch: {bestLossEpoch}, bestWerScore: {bestWerScore:.2f}, bestWerScoreEpoch: {bestWerScoreEpoch}")
+            print(
+                f"currentLoss: {currentLoss:.5f}, bestLoss: {bestLoss:.5f}, bestLossEpoch: {bestLossEpoch}, "
+                f"bestWerScore: {bestWerScore:.2f}, bestWerScoreEpoch: {bestWerScoreEpoch}"
+            )
             print(f"diagValid pred_len stats: {_format_stats(validPredLens)}")
             print(f"diagValid lgt stats: {_format_stats(validLgtLens)}")
             if validBlankProb:
-                print(f"diagValid blank_prob_mean: {np.mean(validBlankProb):.4f}")
+                print(f"diagValid blank_prob_mean: {np.mean(validBlankProb):.6f}")
     else:
         bestWerScore = 65535
         offset = 1
         for i in range(55):
             currentModuleSavePath = "module/bestMoudleNet_" + str(i + offset) + ".pth"
-            checkpoint = torch.load(currentModuleSavePath, map_location=torch.device('cpu'))
+            checkpoint = torch.load(currentModuleSavePath, map_location=torch.device('cpu'), weights_only=False)
             moduleNet.load_state_dict(checkpoint['moduleNet_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
@@ -518,11 +597,15 @@ def train(configParams, isTrain=True, isCalc=False):
             loss_value = []
             total_info = []
             total_sent = []
+            testWerSampleCount = 0
 
             if not os.path.exists('./wer/'):
                 os.makedirs('./wer/')
 
-            for Dict in tqdm(testLoader):
+            effective_test_batches = maxTestBatches if maxTestBatches > 0 else len(testLoader)
+            for test_idx, Dict in enumerate(tqdm(testLoader)):
+                if test_idx >= effective_test_batches:
+                    break
                 data = Dict["video"].to(device)
                 label = Dict["label"]
                 dataLen = Dict["videoLength"]
@@ -563,12 +646,14 @@ def train(configParams, isTrain=True, isCalc=False):
 
                 werScore = WerScore([pred_indices], targetData, idx2word, batchSize)
                 werScoreSum = werScoreSum + werScore
+                testWerSampleCount += batchSize
 
-                torch.cuda.empty_cache()
+                if device.type == "cuda" and ((test_idx + 1) % 50 == 0):
+                    torch.cuda.empty_cache()
 
             currentLoss = np.mean(loss_value)
 
-            werScore = werScoreSum / len(testLoader)
+            werScore = werScoreSum / max(1, testWerSampleCount)
 
             if werScore < bestWerScore:
                 bestWerScore = werScore

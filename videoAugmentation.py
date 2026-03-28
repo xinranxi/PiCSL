@@ -13,6 +13,18 @@ import numpy as np
 import torchvision.transforms as transforms
 
 
+def _resize_numpy_image(img, size, interp='bilinear'):
+    pil_img = PIL.Image.fromarray(img)
+    resample = {
+        'nearest': PIL.Image.NEAREST,
+        'lanczos': PIL.Image.LANCZOS,
+        'bilinear': PIL.Image.BILINEAR,
+        'bicubic': PIL.Image.BICUBIC,
+        'cubic': PIL.Image.BICUBIC,
+    }.get(interp, PIL.Image.BILINEAR)
+    return np.array(pil_img.resize((size[1], size[0]), resample=resample))
+
+
 class Compose(object):
     def __init__(self, transforms):
         self.transforms = transforms
@@ -246,7 +258,7 @@ class RandomRotation(object):
         """
         angle = random.uniform(self.degrees[0], self.degrees[1])
         if isinstance(clip[0], np.ndarray):
-            rotated = [scipy.misc.imrotate(img, angle) for img in clip]
+            rotated = [np.array(PIL.Image.fromarray(img).rotate(angle)) for img in clip]
         elif isinstance(clip[0], PIL.Image.Image):
             rotated = [img.rotate(angle) for img in clip]
         else:
@@ -279,6 +291,25 @@ class TemporalRescale(object):
             index = sorted(random.choices(range(vid_len), k=new_len))
         return clip[index]
 
+
+class TemporalDropout(object):
+    def __init__(self, drop_ratio=0.1, min_len=32, p=0.5):
+        self.drop_ratio = max(0.0, min(0.9, float(drop_ratio)))
+        self.min_len = max(1, int(min_len))
+        self.p = max(0.0, min(1.0, float(p)))
+
+    def __call__(self, clip):
+        if len(clip) <= self.min_len or random.random() > self.p:
+            return clip
+
+        vid_len = len(clip)
+        keep_len = max(self.min_len, int(round(vid_len * (1.0 - self.drop_ratio))))
+        if keep_len >= vid_len:
+            return clip
+
+        keep_indices = sorted(random.sample(range(vid_len), keep_len))
+        return clip[keep_indices]
+
 class RandomResize(object):
     """
     Resize video bysoomingin and out.
@@ -305,7 +336,7 @@ class RandomResize(object):
         new_h = int(im_h * scaling_factor)
         new_size = (new_h, new_w)
         if isinstance(clip[0], np.ndarray):
-            return [scipy.misc.imresize(img, size=(new_h, new_w), interp=self.interpolation) for img in clip]
+            return [_resize_numpy_image(img, (new_h, new_w), self.interpolation) for img in clip]
         elif isinstance(clip[0], PIL.Image.Image):
             return [img.resize(size=(new_w, new_h), resample=self._get_PIL_interp(self.interpolation)) for img in clip]
         else:
