@@ -12,6 +12,9 @@ CE-CSL/
 params/*.pth
 params/*.pkl
 module/*.pth
+CSL/preprocessed/
+*.npy
+*.npz
 CSL/color/
 wer/
 train_logs/

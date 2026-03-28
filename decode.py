@@ -1,8 +1,14 @@
 #实现CTC输出解码（优先使用 torchaudio beam search，失败时回退到 greedy），映射索引与词表，并提供一个自定义CTC前向/后向损失实现。
-try:
-    from torchaudio.models.decoder import ctc_decoder as torchaudio_ctc_decoder
-except ImportError:
-    torchaudio_ctc_decoder = None
+torchaudio_ctc_decoder = None
+
+
+def _load_torchaudio_ctc_decoder():
+    try:
+        from torchaudio.models.decoder import ctc_decoder as decoder_impl
+        return decoder_impl
+    except Exception as e:
+        print(f"Warning: torchaudio ctc_decoder import failed: {e}")
+        return None
 from itertools import groupby
 import torch.nn.functional as F
 import torch
@@ -28,9 +34,10 @@ class Decode(object):# CTC解码类
         for idx in range(1, num_classes):
             self.tokens.append(self.i2g_dict.get(idx, f"<tok_{idx}>"))
         self.ctc_decoder = None
-        if torchaudio_ctc_decoder is not None:
+        decoder_factory = _load_torchaudio_ctc_decoder()
+        if decoder_factory is not None:
             try:
-                self.ctc_decoder = torchaudio_ctc_decoder(
+                self.ctc_decoder = decoder_factory(
                     lexicon=None,
                     tokens=self.tokens,
                     lm=None,
