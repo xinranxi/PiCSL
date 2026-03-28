@@ -37,6 +37,8 @@ def readConfig():
         "frameSampleStride": 1,
         "cnnChunkSize": 8,
         "useAmp": 1,
+        "usePreprocessed": 0,
+        "preprocessedRoot": "CSL/preprocessed",
     }
 
     configPath = get_config_path()
@@ -73,7 +75,7 @@ def readConfig():
         optional_params = [
             "gradAccumSteps", "maxGradNorm", "freezeBackboneEpochs", "backboneLrScale",
             "maxEpochs", "maxTrainBatches", "maxValidBatches", "maxTestBatches",
-            "frameSampleStride", "cnnChunkSize", "useAmp"
+            "frameSampleStride", "cnnChunkSize", "useAmp", "usePreprocessed", "preprocessedRoot"
         ]
         for k in optional_params:
             if cf.has_option("Params", k):

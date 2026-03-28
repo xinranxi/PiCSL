@@ -50,6 +50,8 @@ def build_test_loader(config_params, word2idx):
         config_params["dataSetName"],
         transform=transform_test,
         frameSampleStride=max(1, int(config_params.get("frameSampleStride", 1))),
+        preprocessedRoot=config_params.get("preprocessedRoot", "CSL/preprocessed"),
+        usePreprocessed=int(config_params.get("usePreprocessed", 0)),
     )
     test_loader = DataLoader(
         dataset=test_data,

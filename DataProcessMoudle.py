@@ -21,6 +21,22 @@ import cv2
 PAD = ' '
 
 
+def _normalize_dataset_path(path_value):
+    if not path_value:
+        return None
+    return os.path.normpath(str(path_value))
+
+
+def _build_preprocessed_video_path(video_path, preprocessed_root):
+    if not preprocessed_root:
+        return None
+    normalized_video_path = _normalize_dataset_path(video_path)
+    normalized_root = _normalize_dataset_path(preprocessed_root)
+    drive, tail = os.path.splitdrive(normalized_video_path)
+    safe_tail = tail.lstrip("\\/")
+    return os.path.join(normalized_root, safe_tail) + ".npy"
+
+
 def _read_split_manifest(manifest_path):
     samples = []
     with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -183,7 +199,8 @@ def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName,
 
 
 class MyDataset(Dataset):
-    def __init__(self, ImagePath, LabelPath, word2idx, dataSetName, isTrain=False, transform=None, frameSampleStride=1):
+    def __init__(self, ImagePath, LabelPath, word2idx, dataSetName, isTrain=False, transform=None, frameSampleStride=1,
+                 preprocessedRoot=None, usePreprocessed=0):
         """
         path : 数据路径，包含了图像的路径
         transform：数据处理，对图像进行随机剪裁，以及转换成tensor
@@ -195,6 +212,8 @@ class MyDataset(Dataset):
         self.random_drop = True
         self.isTrain = isTrain
         self.frameSampleStride = max(1, int(frameSampleStride))
+        self.preprocessedRoot = _normalize_dataset_path(preprocessedRoot)
+        self.usePreprocessed = bool(int(usePreprocessed))
 
         if dataSetName not in ("CE-CSL", "CSL"):
             raise ValueError(f"Unsupported dataset: {dataSetName}. Supported: CE-CSL, CSL")
@@ -320,6 +339,16 @@ class MyDataset(Dataset):
 
         return frames
 
+    def _read_preprocessed_frames(self, video_path):
+        preprocessed_path = _build_preprocessed_video_path(video_path, self.preprocessedRoot)
+        if preprocessed_path is None or not os.path.exists(preprocessed_path):
+            return None
+
+        frames = np.load(preprocessed_path)
+        if frames.ndim != 4:
+            raise ValueError(f"Invalid preprocessed frames shape for {preprocessed_path}: {frames.shape}")
+        return frames
+
     def __getitem__(self, index):
         fn, label = self.imgs[index]# 通过index索引返回一个图像路径fn 与 标签label
         # CE-CSL (.mp4) 和 CSL (.avi) 都用 cv2.VideoCapture 读取，逻辑一致
@@ -327,7 +356,12 @@ class MyDataset(Dataset):
         # fn 是视频文件路径，如 CE-CSL/train/A/train-00001.mp4
         info = os.path.basename(fn)
 
-        frames = self._read_video_frames(fn)
+        frames = None
+        if self.usePreprocessed:
+            frames = self._read_preprocessed_frames(fn)
+
+        if frames is None:
+            frames = self._read_video_frames(fn)
 
         if len(frames) == 0:
             print(f"Warning: Video {fn} has 0 frames!")

@@ -23,6 +23,7 @@ INCLUDE_FILES = [
     "videoAugmentation.py",
     "COLAB_UPLOAD_GUIDE.md",
     "README.md",
+    "preprocess_csl_videos.py",
 ]
 
 INCLUDE_DIRS = [

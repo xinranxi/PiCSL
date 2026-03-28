@@ -123,6 +123,8 @@ def train(configParams, isTrain=True, isCalc=False):
     frameSampleStride = max(1, int(configParams.get("frameSampleStride", 1)))
     cnnChunkSize = max(1, int(configParams.get("cnnChunkSize", 64)))
     useAmp = bool(int(configParams.get("useAmp", 1)))
+    usePreprocessed = bool(int(configParams.get("usePreprocessed", 0)))
+    preprocessedRoot = configParams.get("preprocessedRoot", "CSL/preprocessed")
     max_num_states = 1
 
     # 预处理语言序列
@@ -152,17 +154,20 @@ def train(configParams, isTrain=True, isCalc=False):
     # 导入数据
     trainData = DataProcessMoudle.MyDataset(
         trainDataPath, trainLabelPath, word2idx, dataSetName,
-        isTrain=True, transform=transform, frameSampleStride=frameSampleStride
+        isTrain=True, transform=transform, frameSampleStride=frameSampleStride,
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
     )
 
     validData = DataProcessMoudle.MyDataset(
         validDataPath, validLabelPath, word2idx, dataSetName,
-        transform=transformTest, frameSampleStride=frameSampleStride
+        transform=transformTest, frameSampleStride=frameSampleStride,
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
     )
 
     testData = DataProcessMoudle.MyDataset(
         testDataPath, testLabelPath, word2idx, dataSetName,
-        transform=transformTest, frameSampleStride=frameSampleStride
+        transform=transformTest, frameSampleStride=frameSampleStride,
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
     )
 
     trainLoader = DataLoader(dataset=trainData, batch_size=batchSize, shuffle=True, num_workers=numWorkers,

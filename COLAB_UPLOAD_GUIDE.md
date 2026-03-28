@@ -31,6 +31,7 @@
 
 - [`requirements.txt`](requirements.txt)
 - [`README.md`](README.md)
+- [`preprocess_csl_videos.py`](preprocess_csl_videos.py)
 
 数据与权重不要直接打进代码包：
 
@@ -78,7 +79,7 @@ python prepare_colab_bundle.py
 2. `CSL/splits/train_split.txt`
 3. `CSL/splits/valid_split.txt`
 4. `CSL/splits/test_split.txt`
-5. `CSL/color/...` 视频文件
+5. 二选一：`CSL/color/...` 视频文件 或 `CSL/preprocessed/...` 预处理缓存
 6. 可选：`module/*.pth` 预训练权重
 
 目录结构建议保持为：
@@ -88,13 +89,37 @@ python prepare_colab_bundle.py
 ├── CSL/
 │   ├── corpus.txt
 │   ├── splits/
-│   └── color/
+│   ├── color/
+│   └── preprocessed/
 ├── module/
 ├── params/
 └── *.py
 ```
 
 ## 4. 运行方式
+
+### 4.0 推荐：先在本地预处理视频
+
+如果你想减少 Colab 上的实时视频解码开销，可以在本地项目根目录执行：
+
+```bash
+python preprocess_csl_videos.py --frame-sample-stride 4 --output-root CSL/preprocessed
+```
+
+这个脚本会对 [`CSL/splits/train_split.txt`](CSL/splits/train_split.txt)、[`CSL/splits/valid_split.txt`](CSL/splits/valid_split.txt)、[`CSL/splits/test_split.txt`](CSL/splits/test_split.txt) 里引用的视频做：
+
+- 抽帧
+- 缩放到 `224x224`
+- 保存成 `.npy` 缓存
+
+训练时在 [`params/config.ini`](params/config.ini) 中启用：
+
+```ini
+usePreprocessed = 1
+preprocessedRoot = CSL/preprocessed
+```
+
+这样 [`DataProcessMoudle.MyDataset`](DataProcessMoudle.py:185) 会优先读取预处理缓存，找不到时才回退到原始视频读取。
 
 训练：
 
