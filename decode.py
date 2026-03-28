@@ -1,8 +1,8 @@
-#实现CTC输出解码（贪心和Beam搜索，调用ctcdecode），映射索引与词表，并提供一个自定义CTC前向/后向损失实现。
+#实现CTC输出解码（优先使用 torchaudio beam search，失败时回退到 greedy），映射索引与词表，并提供一个自定义CTC前向/后向损失实现。
 try:
-    import ctcdecode
+    from torchaudio.models.decoder import ctc_decoder as torchaudio_ctc_decoder
 except ImportError:
-    ctcdecode = None
+    torchaudio_ctc_decoder = None
 from itertools import groupby
 import torch.nn.functional as F
 import torch
@@ -22,29 +22,34 @@ class Decode(object):# CTC解码类
         self.search_mode = search_mode
         self.blank_id = blank_id
         self.log_probs_input = True
-        self.vocab = [chr(x) for x in range(20000, 20000 + num_classes)]
+        self.blank_token = "<blank>"
+        self.sil_token = "<sil>"
+        self.tokens = [self.blank_token]
+        for idx in range(1, num_classes):
+            self.tokens.append(self.i2g_dict.get(idx, f"<tok_{idx}>"))
         self.ctc_decoder = None
-        if ctcdecode is not None:
+        if torchaudio_ctc_decoder is not None:
             try:
-                # 在云端 Linux 环境下，确保 ctcdecode 可用时优先初始化
-                # beam_width=10 是常用参数，num_processes 可以根据CPU核心数调整
-                self.ctc_decoder = ctcdecode.CTCBeamDecoder(
-                    self.vocab, 
-                    beam_width=10, 
-                    blank_id=blank_id,
-                    num_processes=10,
-                    log_probs_input=self.log_probs_input
+                self.ctc_decoder = torchaudio_ctc_decoder(
+                    lexicon=None,
+                    tokens=self.tokens,
+                    lm=None,
+                    nbest=1,
+                    beam_size=10,
+                    beam_threshold=50,
+                    blank_token=self.blank_token,
+                    sil_token=self.sil_token,
+                    unk_word="<unk>",
                 )
-                print(f"CTCBeamDecoder initialized successfully with beam_width=10")
+                print("torchaudio ctc_decoder initialized successfully with beam_size=10")
             except Exception as e:
-                print(f"Warning: Failed to initialize CTCBeamDecoder: {e}")
+                print(f"Warning: Failed to initialize torchaudio ctc_decoder: {e}")
                 self.ctc_decoder = None
         
         if self.ctc_decoder is None:
             # 如果本地调试或云端安装失败，自动降级为 Greedy Search
-            print("Warning: ctcdecode not available. Using greedy search (max) instead of beam search.")
+            print("Warning: torchaudio beam decoder not available. Using greedy search (max) instead of beam search.")
             self.search_mode = "max"
-        # self.ctc_decoder = None
 
     def decode(self, nn_output, vid_lgt, batch_first=True, probs=False):
         if not batch_first:
@@ -55,36 +60,33 @@ class Decode(object):# CTC解码类
             return self.BeamSearch(nn_output, vid_lgt, probs)
 
     def BeamSearch(self, nn_output, vid_lgt, probs=False):
-        '''
-        CTCBeamDecoder Shape:
-                - Input:  nn_output (B, T, N)
-                          when log_probs_input=True: log-probabilities
-                          when log_probs_input=False: probabilities
-                - Output: beam_resuls (B, N_beams, T), int, need to be decoded by i2g_dict
-                          beam_scores (B, N_beams), p=1/np.exp(beam_score)
-                          timesteps (B, N_beams)
-                          out_lens (B, N_beams)
-        '''
         if self.log_probs_input:
             # Train.py already feeds LogSoftmax output; do NOT apply softmax again.
             if probs:
                 nn_output = (nn_output + 1e-8).log()
-            nn_output = nn_output.cpu()
+            emissions = nn_output.cpu()
         else:
             if not probs:
                 nn_output = nn_output.softmax(-1)
-            nn_output = nn_output.cpu()
-        vid_lgt = vid_lgt.cpu()
-        beam_result, beam_scores, timesteps, out_seq_len = self.ctc_decoder.decode(nn_output, vid_lgt)
+            emissions = nn_output.cpu().log()
+        lengths = vid_lgt.cpu()
+        decoder_results = self.ctc_decoder(emissions, lengths)
         ret_list = []
         last_result = torch.tensor([])  # Track last valid result (fix: avoid reusing reference)
-        for batch_idx in range(len(nn_output)):
-            first_result = beam_result[batch_idx][0][:out_seq_len[batch_idx][0]]
-            if len(first_result) != 0:
-                first_result = torch.stack([x[0] for x in groupby(first_result)])
+        for batch_result in decoder_results:
+            if len(batch_result) > 0:
+                first_tokens = batch_result[0].tokens
+            else:
+                first_tokens = torch.tensor([], dtype=torch.long)
+
+            if len(first_tokens) != 0:
+                first_result = torch.stack([x[0] for x in groupby(first_tokens)])
                 last_result = first_result.clone()  # Clone to avoid reference issues
+            else:
+                first_result = first_tokens
+
             tmp = [(self.i2g_dict[int(gloss_id)], idx) for idx, gloss_id in
-                             enumerate(first_result)]
+                             enumerate(first_result) if int(gloss_id) in self.i2g_dict]
             if len(tmp) > 0:
                 ret_list.append(tmp)
             else:

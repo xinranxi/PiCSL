@@ -69,7 +69,7 @@ python prepare_colab_bundle.py
 !pip install -r requirements.txt
 ```
 
-如果后续需要 Beam Search，再额外安装 `ctcdecode`；若安装失败，[`decode.py`](decode.py) 会自动回退到 greedy decode。
+[`decode.py`](decode.py) 现在优先使用 `torchaudio` 的 beam decoder；如果当前环境缺少对应依赖或初始化失败，会自动回退到 greedy decode。
 
 ### 3.3 上传数据和权重
 
