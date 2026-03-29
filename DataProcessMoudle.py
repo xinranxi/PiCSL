@@ -9,7 +9,9 @@
 # 生成词表并映射成 word2idx，供 MyDataset 加载视频帧与标签用于训练/CTC 解码。
 
 import csv
+import json
 import os
+import tempfile
 import torch
 from collections import defaultdict
 from torch.utils.data import Dataset
@@ -27,14 +29,66 @@ def _normalize_dataset_path(path_value):
     return os.path.normpath(str(path_value))
 
 
-def _build_preprocessed_video_path(video_path, preprocessed_root):
+def _build_preprocessed_video_path(video_path, preprocessed_root, extension=".npy"):
     if not preprocessed_root:
         return None
     normalized_video_path = _normalize_dataset_path(video_path)
     normalized_root = _normalize_dataset_path(preprocessed_root)
     drive, tail = os.path.splitdrive(normalized_video_path)
     safe_tail = tail.lstrip("\\/")
-    return os.path.join(normalized_root, safe_tail) + ".npy"
+    return os.path.join(normalized_root, safe_tail) + extension
+
+
+def _build_cache_sidecar_path(cache_path):
+    return cache_path + ".json"
+
+
+def _safe_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _detect_split_name(path_value):
+    normalized = str(path_value).replace("\\", "/").lower()
+    if "train" in normalized:
+        return "train"
+    if "valid" in normalized or "dev" in normalized:
+        return "valid"
+    if "test" in normalized:
+        return "test"
+    return "unknown"
+
+
+def _atomic_save_compressed_array(cache_path, frames, meta):
+    cache_dir = os.path.dirname(cache_path)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+
+    fd, tmp_path = tempfile.mkstemp(prefix="cache_", suffix=".npz", dir=cache_dir or None)
+    os.close(fd)
+    try:
+        np.savez_compressed(tmp_path, frames=frames)
+        os.replace(tmp_path, cache_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    with open(_build_cache_sidecar_path(cache_path), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def _load_cached_frames(cache_path):
+    if cache_path.endswith(".npy"):
+        frames = np.load(cache_path)
+    else:
+        with np.load(cache_path) as data:
+            frames = data["frames"]
+
+    if frames.ndim != 4:
+        raise ValueError(f"Invalid cached frames shape for {cache_path}: {frames.shape}")
+    return frames
 
 
 def _read_split_manifest(manifest_path):
@@ -200,7 +254,8 @@ def Word2Id(trainLabelPath, validLabelPath, testLabelPath, dataSetName,
 
 class MyDataset(Dataset):
     def __init__(self, ImagePath, LabelPath, word2idx, dataSetName, isTrain=False, transform=None, frameSampleStride=1,
-                 preprocessedRoot=None, usePreprocessed=0):
+                 preprocessedRoot=None, usePreprocessed=0, videoCacheMode="off", videoCacheFormat="npz",
+                 cacheTrainOnly=1, cacheInMemoryItems=0):
         """
         path : 数据路径，包含了图像的路径
         transform：数据处理，对图像进行随机剪裁，以及转换成tensor
@@ -214,9 +269,22 @@ class MyDataset(Dataset):
         self.frameSampleStride = max(1, int(frameSampleStride))
         self.preprocessedRoot = _normalize_dataset_path(preprocessedRoot)
         self.usePreprocessed = bool(int(usePreprocessed))
+        self.videoCacheMode = str(videoCacheMode or "off").strip().lower()
+        self.videoCacheFormat = str(videoCacheFormat or "npz").strip().lower()
+        self.cacheTrainOnly = bool(int(cacheTrainOnly))
+        self.cacheInMemoryItems = max(0, _safe_int(cacheInMemoryItems, 0))
+        self.splitName = _detect_split_name(ImagePath)
+        self._memory_cache = {}
+        self._memory_cache_order = []
+        self.cacheHits = 0
+        self.cacheMisses = 0
+        self.cacheWrites = 0
+        self.rawReads = 0
 
         if dataSetName not in ("CE-CSL", "CSL"):
             raise ValueError(f"Unsupported dataset: {dataSetName}. Supported: CE-CSL, CSL")
+        if self.videoCacheFormat not in ("npz", "npy"):
+            raise ValueError(f"Unsupported cache format: {self.videoCacheFormat}. Supported: npz, npy")
 
         lable = {}
 
@@ -299,6 +367,49 @@ class MyDataset(Dataset):
 
         self.imgs = imgs
 
+    def _is_cache_enabled_for_split(self):
+        if not self.preprocessedRoot:
+            return False
+        if self.videoCacheMode == "off" and not self.usePreprocessed:
+            return False
+        if self.cacheTrainOnly and self.splitName != "train":
+            return False
+        return True
+
+    def _get_cache_path_candidates(self, video_path):
+        preferred_ext = ".npz" if self.videoCacheFormat == "npz" else ".npy"
+        candidates = []
+        preferred = _build_preprocessed_video_path(video_path, self.preprocessedRoot, preferred_ext)
+        if preferred:
+            candidates.append(preferred)
+        legacy_ext = ".npy" if preferred_ext == ".npz" else ".npz"
+        legacy = _build_preprocessed_video_path(video_path, self.preprocessedRoot, legacy_ext)
+        if legacy and legacy not in candidates:
+            candidates.append(legacy)
+        return candidates
+
+    def _memory_get(self, key):
+        if self.cacheInMemoryItems <= 0:
+            return None
+        value = self._memory_cache.get(key)
+        if value is None:
+            return None
+        if key in self._memory_cache_order:
+            self._memory_cache_order.remove(key)
+        self._memory_cache_order.append(key)
+        return value
+
+    def _memory_put(self, key, value):
+        if self.cacheInMemoryItems <= 0:
+            return
+        if key in self._memory_cache_order:
+            self._memory_cache_order.remove(key)
+        self._memory_cache[key] = value
+        self._memory_cache_order.append(key)
+        while len(self._memory_cache_order) > self.cacheInMemoryItems:
+            old_key = self._memory_cache_order.pop(0)
+            self._memory_cache.pop(old_key, None)
+
     def sample_indices(self, n):
         stride = self.frameSampleStride
         indices = np.arange(0, n, stride, dtype=int)
@@ -340,14 +451,54 @@ class MyDataset(Dataset):
         return frames
 
     def _read_preprocessed_frames(self, video_path):
-        preprocessed_path = _build_preprocessed_video_path(video_path, self.preprocessedRoot)
-        if preprocessed_path is None or not os.path.exists(preprocessed_path):
-            return None
+        cache_key = os.path.normpath(video_path)
+        memory_frames = self._memory_get(cache_key)
+        if memory_frames is not None:
+            self.cacheHits += 1
+            return memory_frames
 
-        frames = np.load(preprocessed_path)
-        if frames.ndim != 4:
-            raise ValueError(f"Invalid preprocessed frames shape for {preprocessed_path}: {frames.shape}")
-        return frames
+        for preprocessed_path in self._get_cache_path_candidates(video_path):
+            if preprocessed_path is None or not os.path.exists(preprocessed_path):
+                continue
+            frames = _load_cached_frames(preprocessed_path)
+            self._memory_put(cache_key, frames)
+            self.cacheHits += 1
+            return frames
+
+        self.cacheMisses += 1
+        return None
+
+    def _write_preprocessed_frames(self, video_path, frames):
+        if not self._is_cache_enabled_for_split():
+            return
+        if self.videoCacheMode != "lazy":
+            return
+
+        cache_ext = ".npz" if self.videoCacheFormat == "npz" else ".npy"
+        cache_path = _build_preprocessed_video_path(video_path, self.preprocessedRoot, cache_ext)
+        if cache_path is None or os.path.exists(cache_path):
+            return
+
+        meta = {
+            "video_path": os.path.normpath(video_path),
+            "split": self.splitName,
+            "frame_sample_stride": self.frameSampleStride,
+            "shape": list(frames.shape),
+            "dtype": str(frames.dtype),
+            "cache_format": self.videoCacheFormat,
+        }
+        cache_dir = os.path.dirname(cache_path)
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+
+        if self.videoCacheFormat == "npy":
+            np.save(cache_path, frames)
+            with open(_build_cache_sidecar_path(cache_path), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        else:
+            _atomic_save_compressed_array(cache_path, frames, meta)
+        self.cacheWrites += 1
+        self._memory_put(os.path.normpath(video_path), frames)
 
     def __getitem__(self, index):
         fn, label = self.imgs[index]# 通过index索引返回一个图像路径fn 与 标签label
@@ -357,11 +508,14 @@ class MyDataset(Dataset):
         info = os.path.basename(fn)
 
         frames = None
-        if self.usePreprocessed:
+        if self.usePreprocessed or self.videoCacheMode in ("readonly", "lazy"):
             frames = self._read_preprocessed_frames(fn)
 
         if frames is None:
             frames = self._read_video_frames(fn)
+            self.rawReads += 1
+            frames = np.asarray(frames, dtype=np.uint8)
+            self._write_preprocessed_frames(fn, frames)
 
         if len(frames) == 0:
             print(f"Warning: Video {fn} has 0 frames!")

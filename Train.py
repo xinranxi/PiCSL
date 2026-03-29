@@ -125,6 +125,12 @@ def train(configParams, isTrain=True, isCalc=False):
     useAmp = bool(int(configParams.get("useAmp", 1)))
     usePreprocessed = bool(int(configParams.get("usePreprocessed", 0)))
     preprocessedRoot = configParams.get("preprocessedRoot", "CSL/preprocessed")
+    videoCacheMode = configParams.get("videoCacheMode", "off")
+    videoCacheFormat = configParams.get("videoCacheFormat", "npz")
+    cacheTrainOnly = bool(int(configParams.get("cacheTrainOnly", 1)))
+    cacheInMemoryItems = max(0, int(configParams.get("cacheInMemoryItems", 0)))
+    persistentWorkers = bool(int(configParams.get("persistentWorkers", 1)))
+    prefetchFactor = max(2, int(configParams.get("prefetchFactor", 2)))
     max_num_states = 1
 
     # 预处理语言序列
@@ -155,27 +161,42 @@ def train(configParams, isTrain=True, isCalc=False):
     trainData = DataProcessMoudle.MyDataset(
         trainDataPath, trainLabelPath, word2idx, dataSetName,
         isTrain=True, transform=transform, frameSampleStride=frameSampleStride,
-        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed,
+        videoCacheMode=videoCacheMode, videoCacheFormat=videoCacheFormat,
+        cacheTrainOnly=cacheTrainOnly, cacheInMemoryItems=cacheInMemoryItems
     )
 
     validData = DataProcessMoudle.MyDataset(
         validDataPath, validLabelPath, word2idx, dataSetName,
         transform=transformTest, frameSampleStride=frameSampleStride,
-        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed,
+        videoCacheMode=videoCacheMode, videoCacheFormat=videoCacheFormat,
+        cacheTrainOnly=cacheTrainOnly, cacheInMemoryItems=cacheInMemoryItems
     )
 
     testData = DataProcessMoudle.MyDataset(
         testDataPath, testLabelPath, word2idx, dataSetName,
         transform=transformTest, frameSampleStride=frameSampleStride,
-        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed
+        preprocessedRoot=preprocessedRoot, usePreprocessed=usePreprocessed,
+        videoCacheMode=videoCacheMode, videoCacheFormat=videoCacheFormat,
+        cacheTrainOnly=cacheTrainOnly, cacheInMemoryItems=cacheInMemoryItems
     )
 
-    trainLoader = DataLoader(dataset=trainData, batch_size=batchSize, shuffle=True, num_workers=numWorkers,
-                             pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=True)
-    validLoader = DataLoader(dataset=validData, batch_size=1, shuffle=False, num_workers=numWorkers,
-                             pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=False)
-    testLoader = DataLoader(dataset=testData, batch_size=1, shuffle=False, num_workers=numWorkers,
-                            pin_memory=pinmMemory, collate_fn=DataProcessMoudle.collate_fn, drop_last=False)
+    dataloader_kwargs = {
+        "num_workers": numWorkers,
+        "pin_memory": pinmMemory,
+        "collate_fn": DataProcessMoudle.collate_fn,
+    }
+    if numWorkers > 0:
+        dataloader_kwargs["persistent_workers"] = persistentWorkers
+        dataloader_kwargs["prefetch_factor"] = prefetchFactor
+
+    trainLoader = DataLoader(dataset=trainData, batch_size=batchSize, shuffle=True,
+                             drop_last=True, **dataloader_kwargs)
+    validLoader = DataLoader(dataset=validData, batch_size=1, shuffle=False,
+                             drop_last=False, **dataloader_kwargs)
+    testLoader = DataLoader(dataset=testData, batch_size=1, shuffle=False,
+                            drop_last=False, **dataloader_kwargs)
 
     # 定义模型
     moduleNet = Net.moduleNet(
@@ -262,7 +283,10 @@ def train(configParams, isTrain=True, isCalc=False):
         print(
             f"diagRuntime settings: maxEpochs={maxEpochs}, maxTrainBatches={maxTrainBatches}, "
             f"maxValidBatches={maxValidBatches}, frameSampleStride={frameSampleStride}, "
-            f"cnnChunkSize={cnnChunkSize}, useAmp={useAmp}"
+            f"cnnChunkSize={cnnChunkSize}, useAmp={useAmp}, videoCacheMode={videoCacheMode}, "
+            f"videoCacheFormat={videoCacheFormat}, cacheTrainOnly={cacheTrainOnly}, "
+            f"cacheInMemoryItems={cacheInMemoryItems}, persistentWorkers={persistentWorkers}, "
+            f"prefetchFactor={prefetchFactor}"
         )
         # 训练模型
         epochNum = maxEpochs

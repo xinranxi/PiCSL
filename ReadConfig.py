@@ -39,6 +39,12 @@ def readConfig():
         "useAmp": 1,
         "usePreprocessed": 0,
         "preprocessedRoot": "CSL/preprocessed",
+        "videoCacheMode": "off",
+        "videoCacheFormat": "npz",
+        "cacheTrainOnly": 1,
+        "cacheInMemoryItems": 0,
+        "persistentWorkers": 1,
+        "prefetchFactor": 2,
     }
 
     configPath = get_config_path()
@@ -75,11 +81,16 @@ def readConfig():
         optional_params = [
             "gradAccumSteps", "maxGradNorm", "freezeBackboneEpochs", "backboneLrScale",
             "maxEpochs", "maxTrainBatches", "maxValidBatches", "maxTestBatches",
-            "frameSampleStride", "cnnChunkSize", "useAmp", "usePreprocessed", "preprocessedRoot"
+            "frameSampleStride", "cnnChunkSize", "useAmp", "usePreprocessed", "preprocessedRoot",
+            "videoCacheMode", "videoCacheFormat", "cacheTrainOnly", "cacheInMemoryItems",
+            "persistentWorkers", "prefetchFactor"
         ]
         for k in optional_params:
             if cf.has_option("Params", k):
                 configParams[k] = cf.get("Params", k)
+
+        if (not cf.has_option("Params", "videoCacheMode")) and int(configParams.get("usePreprocessed", 0)) == 1:
+            configParams["videoCacheMode"] = "readonly"
 
         cuda_available = torch.cuda.is_available()
         print("GPU is %s" % cuda_available)

@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -78,25 +80,57 @@ def read_and_sample_video(video_path, frame_sample_stride, resize_hw):
     return np.asarray(frames, dtype=np.uint8)
 
 
-def build_output_path(video_path, output_root):
+def build_output_path(video_path, output_root, extension=".npy"):
     normalized_video_path = normalize_path(video_path)
     drive, tail = os.path.splitdrive(normalized_video_path)
     safe_tail = tail.lstrip("\\/")
-    return os.path.join(output_root, safe_tail) + ".npy"
+    return os.path.join(output_root, safe_tail) + extension
+
+
+def write_cached_array(output_path, frames, meta, cache_format):
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    if cache_format == "npy":
+        np.save(output_path, frames)
+    else:
+        fd, tmp_path = tempfile.mkstemp(prefix="cache_", suffix=".npz", dir=output_dir or None)
+        os.close(fd)
+        try:
+            np.savez_compressed(tmp_path, frames=frames)
+            os.replace(tmp_path, output_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    with open(output_path + ".json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def filter_video_paths(video_paths, cache_splits):
+    if cache_splits == "all":
+        return video_paths
+    keep = []
+    for path in video_paths:
+        normalized = str(path).replace("\\", "/").lower()
+        if f"/{cache_splits}/" in normalized or normalized.startswith(cache_splits + "/"):
+            keep.append(path)
+    return keep
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Preprocess CSL videos into sampled and resized .npy frame arrays.")
+    parser = argparse.ArgumentParser(description="Preprocess CSL videos into sampled and resized compressed frame caches.")
     parser.add_argument("--train-split", default="CSL/splits/train_split.txt")
     parser.add_argument("--valid-split", default="CSL/splits/valid_split.txt")
     parser.add_argument("--test-split", default="CSL/splits/test_split.txt")
-    parser.add_argument("--output-root", default="CSL/preprocessed")
+    parser.add_argument("--output-root", default="CSL/cache_v1")
     parser.add_argument("--frame-sample-stride", type=int, default=4)
     parser.add_argument("--resize", type=int, default=224)
     parser.add_argument("--color-root", default="CSL/color")
     parser.add_argument("--label-start", type=int, default=0)
     parser.add_argument("--label-end", type=int, default=99)
     parser.add_argument("--source-mode", choices=["split", "labels"], default="labels")
+    parser.add_argument("--cache-splits", choices=["train", "valid", "test", "all"], default="train")
+    parser.add_argument("--cache-format", choices=["npz", "npy"], default="npz")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -109,6 +143,7 @@ def main():
             label_start=args.label_start,
             label_end=args.label_end,
         )
+    video_paths = filter_video_paths(video_paths, args.cache_splits)
 
     os.makedirs(args.output_root, exist_ok=True)
 
@@ -117,11 +152,15 @@ def main():
     print(f"Frame sample stride: {args.frame_sample_stride}")
     print(f"Resize: {args.resize}x{args.resize}")
     print(f"Source mode: {args.source_mode}")
+    print(f"Cache splits: {args.cache_splits}")
+    print(f"Cache format: {args.cache_format}")
     if args.source_mode == "labels":
         print(f"Label range: {args.label_start:06d}-{args.label_end:06d}")
 
+    total_input_frames = 0
+    total_cached_frames = 0
     for video_path in tqdm(video_paths):
-        output_path = build_output_path(video_path, args.output_root)
+        output_path = build_output_path(video_path, args.output_root, ".npz" if args.cache_format == "npz" else ".npy")
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
 
@@ -133,8 +172,21 @@ def main():
             frame_sample_stride=max(1, args.frame_sample_stride),
             resize_hw=(args.resize, args.resize),
         )
-        np.save(output_path, frames)
+        total_cached_frames += int(frames.shape[0])
+        total_input_frames += int(max(1, (frames.shape[0] - 1) * max(1, args.frame_sample_stride) + 1))
+        meta = {
+            "video_path": normalize_path(video_path),
+            "shape": list(frames.shape),
+            "dtype": str(frames.dtype),
+            "frame_sample_stride": max(1, args.frame_sample_stride),
+            "resize": [args.resize, args.resize],
+            "cache_format": args.cache_format,
+            "cache_splits": args.cache_splits,
+        }
+        write_cached_array(output_path, frames, meta, args.cache_format)
 
+    print(f"Approx input frames: {total_input_frames}")
+    print(f"Cached frames: {total_cached_frames}")
     print("Preprocessing completed")
 
 

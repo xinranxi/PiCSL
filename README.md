@@ -104,9 +104,65 @@ hiddenSize = 1024           ; 或根据显存调整为 512
 ### 5.3 启动训练
 在微调好配置文件后，运行以下命令开始训练：
 ```bash
-python Train.py
+python SLR.py
 ```
 训练日志将显示 Loss 下降曲线及每个 Epoch 的验证集 WER。
+
+## 6. 视频缓存与数据读取最终版方案
+
+本项目已将原始视频训练链路升级为“压缩缓存 + 分阶段预热 + 训练时懒缓存”的服务器友好方案，核心目标是减少首轮之后的 CPU 解码与磁盘读取开销，提升 GPU 持续利用率。
+
+### 6.1 核心设计
+
+1. 原始视频仍为唯一真源，不再依赖超大无压缩全量 [`*.npy`](README.md) 缓存。
+2. 数据集读取优先使用压缩 [`*.npz`](README.md) 缓存，兼容旧版 [`*.npy`](README.md) 缓存只读加载。
+3. 默认只缓存训练集，避免验证/测试集长期占用大量磁盘。
+4. 支持两种缓存方式：
+   - `lazy`：训练首轮访问时自动生成缓存。
+   - `readonly`：只读已有缓存，不自动写入。
+5. [`Train.py`](Train.py) 已接入 [`persistent_workers`](Train.py:181) 与 [`prefetch_factor`](Train.py:181) 配置，降低 epoch 间 worker 重建成本。
+
+### 6.2 推荐配置
+
+建议直接使用 [`params/config.ini`](params/config.ini) 中的默认服务器配置：
+
+```ini
+[Params]
+frameSampleStride = 4
+numWorkers = 8
+preprocessedRoot = CSL/cache_v1
+videoCacheMode = lazy
+videoCacheFormat = npz
+cacheTrainOnly = 1
+cacheInMemoryItems = 32
+persistentWorkers = 1
+prefetchFactor = 4
+```
+
+### 6.3 推荐运行方式
+
+#### 方式 A：直接训练，首轮自动懒缓存
+
+```bash
+python SLR.py
+```
+
+适合快速开始。首个 epoch 会边训练边生成缓存，后续 epoch 会显著减轻 CPU/IO 瓶颈。
+
+#### 方式 B：先预热训练集缓存，再启动训练
+
+```bash
+python preprocess_csl_videos.py --source-mode split --cache-splits train --output-root CSL/cache_v1 --frame-sample-stride 4 --resize 224 --cache-format npz
+python SLR.py
+```
+
+适合服务器长期训练。此方式通常能更稳定地拉高 GPU 利用率。
+
+### 6.4 迁移说明
+
+- 如果历史配置仍使用 [`usePreprocessed`](params/config.ini)，当前实现仍兼容。
+- 若旧配置中仅开启了 [`usePreprocessed`](params/config.ini)=`1` 而未设置新参数，系统会自动视为 `readonly` 模式。
+- 旧版 [`*.npy`](README.md) 缓存仍可读取，但新部署建议统一迁移到压缩 [`*.npz`](README.md) 缓存目录 [`CSL/cache_v1`](params/config.ini)。
 
 ---
 *Created by AI Assistant for Undergraduate Thesis Project*
