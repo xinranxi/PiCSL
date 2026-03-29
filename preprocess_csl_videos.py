@@ -34,6 +34,16 @@ def collect_video_paths_from_splits(split_files):
     return video_paths
 
 
+def resolve_split_files(args):
+    split_map = {
+        "train": [args.train_split],
+        "valid": [args.valid_split],
+        "test": [args.test_split],
+        "all": [args.train_split, args.valid_split, args.test_split],
+    }
+    return split_map[args.cache_splits]
+
+
 def collect_video_paths_from_label_dirs(color_root, label_start, label_end):
     video_paths = []
     color_root_path = Path(color_root)
@@ -106,17 +116,6 @@ def write_cached_array(output_path, frames, meta, cache_format):
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 
-def filter_video_paths(video_paths, cache_splits):
-    if cache_splits == "all":
-        return video_paths
-    keep = []
-    for path in video_paths:
-        normalized = str(path).replace("\\", "/").lower()
-        if f"/{cache_splits}/" in normalized or normalized.startswith(cache_splits + "/"):
-            keep.append(path)
-    return keep
-
-
 def main():
     parser = argparse.ArgumentParser(description="Preprocess CSL videos into sampled and resized compressed frame caches.")
     parser.add_argument("--train-split", default="CSL/splits/train_split.txt")
@@ -134,7 +133,7 @@ def main():
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
-    split_files = [args.train_split, args.valid_split, args.test_split]
+    split_files = resolve_split_files(args)
     if args.source_mode == "split":
         video_paths = collect_video_paths_from_splits(split_files)
     else:
@@ -143,7 +142,6 @@ def main():
             label_start=args.label_start,
             label_end=args.label_end,
         )
-    video_paths = filter_video_paths(video_paths, args.cache_splits)
 
     os.makedirs(args.output_root, exist_ok=True)
 
