@@ -2,7 +2,7 @@ from pathlib import Path
 
 BASE_DIR = Path("CSL/color")
 SPLIT_DIR = Path("CSL/splits")
-TARGET_LABELS = {"000000", "000001", "000002", "000003", "000004", "000005"}
+TARGET_LABELS = {f"{i:06d}" for i in range(100)}
 SKIP_VIDEOS = {"P39_s1_00_2_color.avi"}
 SPLITS = {
     "train": range(1, 43),
@@ -30,7 +30,8 @@ def main():
         key=lambda p: p.name,
     )
 
-    print("labels:", [p.name for p in label_dirs])
+    print("labels:", [p.name for p in label_dirs[:5]], "...", [p.name for p in label_dirs[-5:]])
+    print("total labels:", len(label_dirs))
     for split_name, persons in SPLITS.items():
         all_lines = []
         for label_dir in label_dirs:
