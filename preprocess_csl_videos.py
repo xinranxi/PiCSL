@@ -1,5 +1,6 @@
 import argparse
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -10,7 +11,7 @@ def normalize_path(path_value):
     return os.path.normpath(path_value)
 
 
-def collect_video_paths(split_files):
+def collect_video_paths_from_splits(split_files):
     video_paths = []
     seen = set()
     for split_file in split_files:
@@ -28,6 +29,21 @@ def collect_video_paths(split_files):
                 if video_path not in seen:
                     seen.add(video_path)
                     video_paths.append(video_path)
+    return video_paths
+
+
+def collect_video_paths_from_label_dirs(color_root, label_start, label_end):
+    video_paths = []
+    color_root_path = Path(color_root)
+    if not color_root_path.exists():
+        return video_paths
+
+    for label_idx in range(label_start, label_end + 1):
+        label_dir = color_root_path / f"{label_idx:06d}"
+        if not label_dir.exists() or not label_dir.is_dir():
+            continue
+        for video_path in sorted(label_dir.glob("*.avi")):
+            video_paths.append(normalize_path(str(video_path)))
     return video_paths
 
 
@@ -77,17 +93,32 @@ def main():
     parser.add_argument("--output-root", default="CSL/preprocessed")
     parser.add_argument("--frame-sample-stride", type=int, default=4)
     parser.add_argument("--resize", type=int, default=224)
+    parser.add_argument("--color-root", default="CSL/color")
+    parser.add_argument("--label-start", type=int, default=0)
+    parser.add_argument("--label-end", type=int, default=99)
+    parser.add_argument("--source-mode", choices=["split", "labels"], default="labels")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
     split_files = [args.train_split, args.valid_split, args.test_split]
-    video_paths = collect_video_paths(split_files)
+    if args.source_mode == "split":
+        video_paths = collect_video_paths_from_splits(split_files)
+    else:
+        video_paths = collect_video_paths_from_label_dirs(
+            color_root=args.color_root,
+            label_start=args.label_start,
+            label_end=args.label_end,
+        )
+
     os.makedirs(args.output_root, exist_ok=True)
 
     print(f"Found {len(video_paths)} videos to preprocess")
     print(f"Output root: {args.output_root}")
     print(f"Frame sample stride: {args.frame_sample_stride}")
     print(f"Resize: {args.resize}x{args.resize}")
+    print(f"Source mode: {args.source_mode}")
+    if args.source_mode == "labels":
+        print(f"Label range: {args.label_start:06d}-{args.label_end:06d}")
 
     for video_path in tqdm(video_paths):
         output_path = build_output_path(video_path, args.output_root)
